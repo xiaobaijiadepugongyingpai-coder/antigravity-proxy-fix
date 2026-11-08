@@ -1,0 +1,34 @@
+# 编译产物
+*.exe
+*.obj
+*.o
+!Antigravity-Proxy.cmd
+
+# 本地配置与备份
+*.bak
+*.log
+*-backup/
+shortcut-backup/
+logs-backup/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*~
+
+# 系统
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 个人隐私（防止误提交）
+*.png
+*.jpg
+*.jpeg
+screenshot*
