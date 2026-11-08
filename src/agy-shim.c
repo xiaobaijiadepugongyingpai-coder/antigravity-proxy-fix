@@ -11,11 +11,35 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <shellapi.h>     /* CommandLineToArgvW */
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/*
+ * 版本标记
+ *
+ * 用途：让部署的二进制可自证身份。
+ *
+ * 为什么需要：GCC 会合并字符串池，用 strings/grep 搜 "HTTP_PROXY" 之类的
+ * 字面量在优化后可能搜不到（实测新旧版本都数出 1 次，无法区分）。
+ * 所以这里放一个独立的、永不复用的版本串。
+ *
+ * 验证方式：
+ *   agy --version
+ *   → 输出 agy-shim 2.0.0 (built <日期>)
+ *
+ * 或直接在二进制里搜：
+ *   grep -a "agy-shim-version:" shim/agy.exe
+ */
+#define SHIM_VERSION   "2.0.0"
+#define SHIM_BUILT     __DATE__
+
+/* volatile 阻止编译器优化掉未引用的常量 */
+static volatile const char kVersionTag[] =
+    "agy-shim-version:" SHIM_VERSION " built " SHIM_BUILT;
 
 static int probe_port(unsigned short port)
 {
@@ -101,6 +125,23 @@ int main(void)
     PROCESS_INFORMATION pi;
     DWORD code = 1;
     WSADATA wsa;
+
+    /* --version / -V：只打印版本，不启动 agy
+     * 这是验证部署二进制与源码一致性的手段（见 kVersionTag 注释） */
+    {
+        int argc = 0;
+        wchar_t **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+        if (argv) {
+            if (argc >= 2 &&
+                (wcscmp(argv[1], L"--version") == 0 ||
+                 wcscmp(argv[1], L"-V") == 0)) {
+                printf("agy-shim %s (built %s)\n", SHIM_VERSION, SHIM_BUILT);
+                LocalFree(argv);
+                return 0;
+            }
+            LocalFree(argv);
+        }
+    }
 
     if (!GetModuleFileNameW(NULL, self, MAX_PATH)) {
         fwprintf(stderr, L"agy-shim: GetModuleFileNameW failed\n");

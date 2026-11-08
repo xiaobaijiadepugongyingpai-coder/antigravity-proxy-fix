@@ -604,6 +604,73 @@ setx TARGET_PROXY "http://127.0.0.1:新端口"       # CLI 用
 setx APP_PROXY    "http://127.0.0.1:新端口"       # GUI 用
 ```
 
+### Q5：配置好了，但程序还是超时——怎么区分是配置问题还是节点问题
+
+**这是最容易误判的情况**，因为两者现象一样（都是超时）。
+
+**转发器只保证「流量走代理」，不保证「代理能出网」。** 节点半死时，转发器照样注入变量，程序照样超时。
+
+#### 一条命令区分
+
+```powershell
+'cloudcode-pa.googleapis.com',
+'daily-cloudcode-pa.googleapis.com',
+'oauth2.googleapis.com',
+'accounts.google.com' | ForEach-Object {
+    $code = curl.exe -x http://127.0.0.1:7897 -s -o NUL -w "%{http_code}" --max-time 8 "https://$_/"
+    "{0,-40} {1}" -f $_, $code
+}
+```
+
+| 结果 | 判定 | 处理 |
+|---|---|---|
+| 全部有响应（404/302/204） | 正常 | — |
+| **全部 000** | 配置失效 | 检查 PATH / 快捷方式 |
+| **只有 cloudcode-pa 系列 000** | **节点上游故障** | **换节点，配置不用动** |
+
+#### 为什么会有"半死节点"
+
+代理节点能出网（`google.com` 正常），但它到 Google 某个特定上游的链路有问题：
+
+- 该出口 IP 被 Google 限流
+- 节点中转线路拥塞
+- 订阅节点本身丢包
+
+这类故障的特征就是**部分域名通、部分不通**，用 `ping` 或单一域名测不出来。
+
+#### 版本自证：确认部署的二进制是哪个版本
+
+shim 自带版本标记，可以直接问：
+
+```powershell
+agy --version
+# 应输出：agy-shim 2.0.0 (built Nov  8 2026)
+```
+
+如果没有任何输出，说明走的是原始 `agy.exe`（转发出问题了）。
+
+也可以直接从二进制里查：
+
+```powershell
+Select-String -Path "$env:LOCALAPPDATA\agy\shim\agy.exe" -Pattern "agy-shim-version" -Encoding ascii
+```
+
+#### 一个真实案例
+
+实测遇到过：
+
+```
+cloudcode-pa.googleapis.com          000   ← 超时
+daily-cloudcode-pa.googleapis.com    000   ← 超时
+oauth2.googleapis.com                404   ← 正常
+accounts.google.com                  302   ← 正常
+www.google.com                       200   ← 正常
+```
+
+此时 agy 完全不可用：`Error: timed out waiting for available models`（耗时 40+ 秒）。
+
+**换节点后 3 秒恢复，配置文件一行没动。**
+
 ---
 
 ## 八、总结
