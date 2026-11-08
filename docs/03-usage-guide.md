@@ -818,7 +818,79 @@ Select-String "$env:APPDATA\Antigravity\logs\language_server.log" -Pattern "SCOP
 # 应该是 ...\agy\shim\agy.exe 而不是 ...\agy\bin\agy.exe
 ```
 
-### 7.4 显示了模型列表但对话报错
+### 7.4 ⚠️ 症状对照：修复失效 vs 节点故障
+
+**这一节非常重要**，因为这两种情况看起来一样，但处理方式完全不同。
+
+agy 超时，可能是两个原因：
+
+| 症状 | 原因 | 怎么判断 | 怎么处理 |
+|---|---|---|---|
+| 所有 Google 域名都不通 | **修复失效**（没走代理） | `agy --version` 无输出 / 解析位置是 `bin\` | 重新配置第四章 |
+| **只有 cloudcode-pa 不通，其它域名正常** | **节点故障** | 见下方诊断命令 | **换节点**，不用改配置 |
+
+#### 诊断命令：一条命令区分两者
+
+```powershell
+# 逐域名测试（走代理）
+'cloudcode-pa.googleapis.com',
+'daily-cloudcode-pa.googleapis.com',
+'oauth2.googleapis.com',
+'accounts.google.com' | ForEach-Object {
+    $code = curl.exe -x http://127.0.0.1:7897 -s -o NUL -w "%{http_code}" --max-time 8 "https://$_/"
+    "{0,-40} {1}" -f $_, $code
+}
+```
+
+**结果解读**：
+
+```
+✓ 全都是 404/302/204（有响应）        → 一切正常
+✗ 全部 000（超时）                     → 修复失效，回去查第四章
+✗ 只有 cloudcode-pa 系列 000          → 节点对上游故障，换节点
+```
+
+#### 为什么会出现「只有 cloudcode-pa 不通」
+
+agy 拉取模型列表、发起对话，走的都是 `cloudcode-pa.googleapis.com` 这个域名。
+
+代理节点本身能出网（所以 `google.com` 正常），但**节点到 Google 这个特定上游的链路有问题**——常见于：
+
+- 该 IP 被 Google 限流
+- 节点中转服务器到 Google 的线路拥塞
+- 订阅节点本身"半死"（TCP 通但实际丢包）
+
+**这不是配置问题，换一个节点就好。**
+
+#### 怎么换节点
+
+在你的代理客户端里：
+
+1. 找到承载 Google 流量的那个策略组（通常是手动固定的那个）
+2. 换到另一个节点
+3. 再跑一次上面的诊断命令确认
+
+> **注意**：`shim` 只负责保证「流量走代理」，**不保证「代理能出网」**。节点健康需要你自己监控。
+
+#### 一个真实的例子
+
+实测遇到过：
+
+```
+cloudcode-pa.googleapis.com          000  ← 超时
+daily-cloudcode-pa.googleapis.com    000  ← 超时
+oauth2.googleapis.com                404  ← 正常
+accounts.google.com                  302  ← 正常
+www.google.com                       200  ← 正常
+```
+
+当时 agy 完全不可用（`Error: timed out waiting for available models`，耗时 40+ 秒）。
+
+**换节点后立刻恢复**，3 秒内返回模型列表。
+
+配置一行没动。
+
+### 7.5 显示了模型列表但对话报错
 
 可能是账号额度或订阅问题。检查：
 
@@ -830,7 +902,7 @@ agy
 
 免费账号额度较低，可能触发限流。**Google AI Pro** 订阅额度明显更高。
 
-### 7.5 `agy` 命令找不到
+### 7.6 `agy` 命令找不到
 
 说明 PATH 里没有。检查：
 
@@ -851,7 +923,7 @@ $p = [Environment]::GetEnvironmentVariable('Path','User')
 
 改完重开终端。
 
-### 7.6 PowerShell 启动时报"禁止运行脚本"
+### 7.7 PowerShell 启动时报"禁止运行脚本"
 
 ```
 无法加载文件 ...\profile.ps1，因为在此系统上禁止运行脚本
@@ -868,7 +940,7 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 
 `RemoteSigned` = 本地脚本可跑，下载的必须签名。这是微软推荐的日常档位。
 
-### 7.7 升级后快捷方式失效
+### 7.8 升级后快捷方式失效
 
 Antigravity 有自动更新。如果更新后发现又卡住了：
 
@@ -879,7 +951,7 @@ Antigravity 有自动更新。如果更新后发现又卡住了：
 
 `agy` 升级**不会**影响 shim（两者在不同目录）。
 
-### 7.8 桌面版页面能开但功能报错
+### 7.9 桌面版页面能开但功能报错
 
 看这个日志：
 

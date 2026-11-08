@@ -118,10 +118,12 @@ agy -p "reply OK"               # 应返回 OK
 │   ├── 03-usage-guide.md              # 国内使用完全指南
 │   └── ai-collaboration/
 │       ├── 01-self-assessment.md      # AI 自评报告（主动列 4 项弱点）
-│       ├── 02-peer-review.md          # 另一 AI 独立复核（发现 2 项未披露问题）
-│       └── 03-response.md             # 回应、修复、方法论复盘
+│       ├── 02-peer-review.md          # 第一轮独立复核（发现 2 项未披露问题）
+│       ├── 03-response.md             # 第一次回应、修复、方法论复盘
+│       ├── 04-review-round2.md        # 第二轮复核（发现验证时效性盲区）
+│       └── 05-response-round2.md      # 第二次回应（版本自证 + 症状对照）
 ├── src/
-│   ├── agy-shim.c                     # CLI 转发器源码（C，190 行）
+│   ├── agy-shim.c                     # CLI 转发器源码（C，v2.0.0 带版本自证）
 │   └── Antigravity-Proxy.cmd          # 桌面版启动器
 └── scripts/
     ├── repoint-shortcut.ps1           # 改写快捷方式指向启动器
@@ -143,6 +145,14 @@ agy -p "reply OK"               # 应返回 OK
 2. **探测失败不注入**：代理没开时保持原生行为，避免"修得更坏"
 3. **退出码精确透传**：`WaitForSingleObject` + `GetExitCodeProcess`
 4. **参数原样透传**：从 `GetCommandLineW` 提取原始参数串，避免二次解析破坏引号
+5. **版本自证**：`agy --version` 可查，用于确认部署的二进制与源码一致
+
+```powershell
+> agy --version
+agy-shim 2.0.0 (built Nov  8 2026)
+```
+
+> **为什么需要版本标记**：GCC 会合并字符串池，用 `strings` 搜 `HTTP_PROXY` 之类的字面量在优化后可能搜不到——新旧版本都数出 1 次，无法区分。所以放一个独立的版本串。
 
 ### 为什么 CLI 用 C 而 GUI 用 .cmd
 
