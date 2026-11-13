@@ -69,6 +69,17 @@ Antigravity / agy ──注入 HTTPS_PROXY──> 127.0.0.1:7897
 powershell -ExecutionPolicy Bypass -File .\scripts\repoint-shortcut.ps1
 ```
 
+**强烈建议同时装自愈脚本。** Antigravity 用 Squirrel/Electron 更新框架，**每次更新都会重建开始菜单快捷方式**并还原成原始 exe——这会静默地让故障复发，而且桌面图标可能还正常，极难排查。
+
+```powershell
+# 自愈脚本放这里
+Copy-Item .\scripts\self-heal-shortcuts.ps1 "$env:USERPROFILE\.agy-shim\"
+
+# 启动项放这里（每次登录跑一次，无窗口；正常时不写任何东西）
+Copy-Item .\scripts\self-heal-shortcuts.vbs `
+  "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\"
+```
+
 ### 2. 命令行版（agy）
 
 ```powershell
@@ -126,12 +137,16 @@ agy -p "reply OK"               # 应返回 OK
 │   ├── agy-shim.c                     # CLI 转发器源码（C，v2.0.0 带版本自证）
 │   └── Antigravity-Proxy.cmd          # 桌面版启动器
 └── scripts/
-    ├── repoint-shortcut.ps1           # 改写快捷方式指向启动器
+    ├── repoint-shortcut.ps1           # 改写快捷方式指向启动器（全量重写）
+    ├── self-heal-shortcuts.ps1        # 更新后自动修复（只在被还原时动手）
+    ├── self-heal-shortcuts.vbs        # 启动项包装（无窗口）
     ├── agy-proxy-toggle.ps1           # agy shim 启用/撤销/查状态
     ├── query-mihomo.py                # 查询 Clash 实际模式与节点
     ├── verify-review.ps1              # 全面验证脚本
     └── sysproxy-toggle.ps1            # 系统代理开关（测试用）
 ```
+
+> **所有 `.ps1` / `.cmd` 都是纯 ASCII（全英文）。** 含中文但无 UTF-8 BOM 的 `.ps1` 在中文 Windows + PowerShell 5.1 下会被按 GBK 解析，报 `TerminatorExpectedAtEndOfString`。全英文方案不依赖任何代码页设置。
 
 ---
 
