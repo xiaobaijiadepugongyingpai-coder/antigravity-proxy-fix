@@ -472,10 +472,25 @@ foreach ($t in $targets) {
         $bad++
     }
 }
-if ($bad) { Write-Warning "$bad 个快捷方式未生效" }
+if ($bad -gt 0) { Write-Warning ("$bad shortcut(s) still point at the raw exe") }
 ```
 
 > **为什么必须验证**：批量修改多处时，很容易只确认手边那一个。实测遇到过「桌面改好了、开始菜单被更新器还原」的情况——从桌面启动正常，从开始菜单启动原故障完整复发，排查难度极高。
+>
+> **而且这会反复发生**：Antigravity 用 Squirrel/Electron 更新框架，每次更新都重建开始菜单快捷方式。仓库提供 `scripts/self-heal-shortcuts.ps1` 做自动修复。
+
+#### 顺带一个编码陷阱
+
+`.ps1` 含中文但**没有 UTF-8 BOM** 时，中文 Windows + PowerShell 5.1 会按 GBK 解析，报 `TerminatorExpectedAtEndOfString`。
+
+两种解法：
+
+| 解法 | 说明 |
+|---|---|
+| 存成 UTF-8 **with BOM** | 社区建议的原方案。PS 5.1 认 BOM，但部分工具（Git Bash、某些编辑器）会被 BOM 干扰 |
+| **全部写英文（本仓库采用）** | 零依赖，任何代码页下都正确 |
+
+本项目所有 `.ps1` / `.cmd` 都是纯 ASCII。
 
 ---
 

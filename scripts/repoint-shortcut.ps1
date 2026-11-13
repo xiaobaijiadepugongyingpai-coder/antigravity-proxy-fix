@@ -1,11 +1,17 @@
 $ErrorActionPreference = 'Stop'
 
 # ============================================================
-#  改写 Antigravity 快捷方式，指向带代理的启动器
+#  Repoint Antigravity shortcuts to the proxy launcher
 #
-#  为什么需要：Antigravity 的 Go 内核只读环境变量代理，
-#  不认 Windows 系统代理。启动器负责注入，本脚本负责让
-#  快捷方式调用启动器而不是原始 exe。
+#  Why: Antigravity's Go core only reads HTTP_PROXY/HTTPS_PROXY
+#  environment variables. It ignores the Windows system proxy.
+#  The launcher injects those variables; this script makes the
+#  shortcuts call the launcher instead of the raw exe.
+#
+#  NOTE: this file is intentionally pure ASCII (English only).
+#  Non-ASCII text in a .ps1 without a BOM is misread by
+#  Windows PowerShell 5.1 under a non-UTF8 ANSI code page,
+#  which breaks parsing. Keep it ASCII.
 # ============================================================
 
 $launcher = Join-Path $env:USERPROFILE '.agy-shim\Antigravity-Proxy.cmd'
@@ -13,7 +19,7 @@ $exe      = Join-Path $env:LOCALAPPDATA 'Programs\antigravity\Antigravity.exe'
 
 if (-not (Test-Path $launcher)) {
     Write-Warning "launcher not found: $launcher"
-    Write-Warning '请先把 Antigravity-Proxy.cmd 放到该位置'
+    Write-Warning 'Place Antigravity-Proxy.cmd in a .agy-shim folder under your user profile first.'
     exit 1
 }
 if (-not (Test-Path $exe)) {
@@ -21,7 +27,7 @@ if (-not (Test-Path $exe)) {
     exit 1
 }
 
-# 桌面快捷方式可能被用户移动到子目录，都尝试一下
+# The desktop shortcut may have been moved into a subfolder; try both.
 $targets = @(
     (Join-Path $env:USERPROFILE 'Desktop\Antigravity.lnk'),
     (Join-Path $env:USERPROFILE 'Desktop\Agent\Antigravity.lnk'),
@@ -40,15 +46,15 @@ foreach ($t in $targets) {
     $s.TargetPath       = $launcher
     $s.Arguments        = ''
     $s.WorkingDirectory = Split-Path $launcher
-    $s.IconLocation     = $exe + ',0'    # 保留原图标
-    $s.WindowStyle      = 7              # 最小化，避免 cmd 黑框闪
+    $s.IconLocation     = $exe + ',0'    # keep the original icon
+    $s.WindowStyle      = 7              # minimized, hide the cmd flash
     $s.Description      = 'Antigravity (with proxy)'
     $s.Save()
 
     Write-Host ("updated: " + $t)
 }
 
-# 改完必须逐一验证 —— 批量修改最容易漏掉其中一个
+# Always verify afterwards: bulk edits are the easiest place to miss one.
 Write-Host ''
 Write-Host '--- verify ---'
 $bad = 0
@@ -56,14 +62,16 @@ foreach ($t in $targets) {
     if (-not (Test-Path $t)) { continue }
     $target = $sh.CreateShortcut($t).TargetPath
     if ($target -like '*.cmd') {
-        Write-Host "  OK   $t"
+        Write-Host ("  OK   " + $t)
     } else {
-        Write-Host "  FAIL $t -> $target" -ForegroundColor Red
+        Write-Host ("  FAIL " + $t + " -> " + $target) -ForegroundColor Red
         $bad++
     }
 }
-if ($bad) {
-    Write-Warning "$bad 个快捷方式未生效"
+
+if ($bad -gt 0) {
+    Write-Warning ("$bad shortcut(s) still point at the raw exe")
     exit 1
 }
-Write-Host '全部生效' -ForegroundColor Green
+
+Write-Host 'All shortcuts now point to the launcher.' -ForegroundColor Green

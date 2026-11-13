@@ -283,7 +283,7 @@ foreach ($t in $targets) {
         $bad++
     }
 }
-if ($bad) { Write-Warning "$bad 个快捷方式未生效，请重跑本步骤" }
+if ($bad -gt 0) { Write-Warning ("$bad shortcut(s) still point at the raw exe") }
 ```
 
 改完后，**双击桌面图标就能正常启动**，和以前一样。
@@ -1195,13 +1195,48 @@ if ($bad -gt 0) { Write-Warning "有 $bad 个快捷方式未指向启动器，�
 
 ### 定期自查（每月或每次大版本更新后）
 
-Antigravity 的自动更新**可能重建快捷方式**，把指向还原成原始 exe。建议更新后跑一次上面的验证脚本。
+Antigravity 用 **Squirrel / Electron 自动更新框架**，每次更新都会**重建开始菜单快捷方式**，把它还原成原始 exe。
 
-如果发现被还原，重跑一次 `repoint-shortcut.ps1` 即可：
+**这是确定会发生的，不是偶尔。** 已被实测证实（一次更新后开始菜单项被改回 `Antigravity.exe`）。
+
+后果：从开始菜单启动 → 拿不到代理变量 → 原故障完整复发。而桌面图标可能还正常，极难排查。
+
+#### 方案一：装自愈脚本（推荐，一次配置永久生效）
+
+仓库里有 `scripts/self-heal-shortcuts.ps1` + `self-heal-shortcuts.vbs`。
+
+把 PS1 放到 `%USERPROFILE%\.agy-shim\`，VBS 放到启动文件夹：
+
+```powershell
+# 1. 放脚本
+Copy-Item .\scripts\self-heal-shortcuts.ps1 "$env:USERPROFILE\.agy-shim\"
+
+# 2. 放启动项（每次登录自动跑一次，无窗口）
+Copy-Item .\scripts\self-heal-shortcuts.vbs `
+  "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\"
+```
+
+脚本行为：
+
+- 每次登录跑一次
+- **只有发现快捷方式被还原时才改**，正常状态下零写入、零弹窗
+- 退出码 0 = 正常或已修复
+
+#### 方案二：手动自查
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.agy-shim\self-heal-shortcuts.ps1"
+```
+
+有输出说明修了东西；无输出说明一切正常。
+
+#### 方案三：全量重指
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.agy-shim\repoint-shortcut.ps1"
 ```
+
+`repoint-shortcut.ps1` 会无条件重写全部三个候选路径（桌面/桌面 Agent 子目录/开始菜单），适合首次配置或彻底重置。
 
 ---
 

@@ -402,10 +402,43 @@ foreach ($t in $targets) {
         $bad++
     }
 }
-if ($bad) { Write-Warning "$bad 个快捷方式未生效" }
+if ($bad -gt 0) { Write-Warning ("$bad shortcut(s) still point at the raw exe") }
 ```
 
 > **为什么必须验证**：批量修改多处时，很容易只确认手边那一个。实测遇到过「桌面改好了、开始菜单被更新器还原」的情况——从桌面启动正常，从开始菜单启动原故障完整复发，排查难度极高。
+
+#### 更新会重置快捷方式：这是设计行为，不是偶然
+
+Antigravity 用 **Squirrel / Electron 自动更新框架**。每次安装更新，它都会**重建开始菜单快捷方式**，把目标写回原始 exe。
+
+所以「改一次就永久生效」是不成立的。有两个应对方式：
+
+**方式 A：装自愈脚本（推荐）**
+
+`scripts/self-heal-shortcuts.ps1` 只检查、只在被还原时才改：
+
+```powershell
+# 每次登录自动跑一次（无窗口）
+Copy-Item .\scripts\self-heal-shortcuts.vbs `
+  "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\"
+```
+
+**方式 B：更新后手动跑一次**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.agy-shim\repoint-shortcut.ps1"
+```
+
+#### 脚本编码陷阱（社区反馈）
+
+`.ps1` 文件如果**含中文且没有 UTF-8 BOM**，在中文 Windows + PowerShell 5.1 下会被按 GBK 解析，直接报：
+
+```
+TerminatorExpectedAtEndOfString
+ParserError: 字符串缺少终止符
+```
+
+本仓库所有 `.ps1` 和 `.cmd` 因此**一律写成纯 ASCII（全英文）**。这样不依赖任何代码页设置，也不需要在 BOM 和编辑器兼容性之间做取舍。
 
 ---
 
