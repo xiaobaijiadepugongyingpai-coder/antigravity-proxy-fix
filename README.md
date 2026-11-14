@@ -114,6 +114,7 @@ agy -p "reply OK"               # 应返回 OK
 | [02 · 实践方案](docs/02-practice-per-app-proxy.md) | 三种方案对比、完整实现、代理模式选择 | 想自己配置的人 |
 | [03 · 使用指南](docs/03-usage-guide.md) | 从安装到排查的完整手册（含 CLI 命令详解） | Antigravity 用户 |
 | [AI 协作记录](docs/ai-collaboration/) | 自评 → 同行复核 → 修复的完整闭环 | 研究 AI 工作流的人 |
+| [交接报告](docs/HANDOVER.md) | 架构、决策理由、故障树、遗留问题 | **接手维护的人 / AI** |
 
 ---
 
