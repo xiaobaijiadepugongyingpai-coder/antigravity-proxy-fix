@@ -17,14 +17,18 @@ $ErrorActionPreference = 'Stop'
 $launcher = Join-Path $env:USERPROFILE '.agy-shim\Antigravity-Proxy.cmd'
 $exe      = Join-Path $env:LOCALAPPDATA 'Programs\antigravity\Antigravity.exe'
 
-if (-not (Test-Path $launcher)) {
+if (-not (Test-Path -LiteralPath $launcher)) {
     Write-Warning "launcher not found: $launcher"
     Write-Warning 'Place Antigravity-Proxy.cmd in a .agy-shim folder under your user profile first.'
     exit 1
 }
-if (-not (Test-Path $exe)) {
-    Write-Warning "Antigravity.exe not found: $exe"
-    exit 1
+
+# A missing Antigravity.exe is NOT fatal. The exe is only used to copy the
+# original icon; the repair itself is about the launcher. self-heal also
+# proceeds without it, so refusing here would make the two scripts disagree
+# on the same machine state.
+if (-not (Test-Path -LiteralPath $exe)) {
+    Write-Warning "Antigravity.exe not found: $exe (continuing without a custom icon)"
 }
 
 # The desktop shortcut may have been moved into a subfolder; try both.
@@ -37,7 +41,7 @@ $targets = @(
 $sh = New-Object -ComObject WScript.Shell
 
 foreach ($t in $targets) {
-    if (-not (Test-Path $t)) {
+    if (-not (Test-Path -LiteralPath $t)) {
         Write-Host ("skip (not found): " + $t)
         continue
     }
@@ -49,7 +53,7 @@ foreach ($t in $targets) {
         $s.TargetPath       = $launcher
         $s.Arguments        = ''
         $s.WorkingDirectory = Split-Path $launcher
-        $s.IconLocation     = $exe + ',0'    # keep the original icon
+        if (Test-Path -LiteralPath $exe) { $s.IconLocation = $exe + ',0' }  # keep the original icon
         $s.WindowStyle      = 7              # minimized, hide the cmd flash
         $s.Description      = 'Antigravity (with proxy)'
         $s.Save()
@@ -66,7 +70,7 @@ Write-Host ''
 Write-Host '--- verify ---'
 $bad = 0
 foreach ($t in $targets) {
-    if (-not (Test-Path $t)) { continue }
+    if (-not (Test-Path -LiteralPath $t)) { continue }
     $target = $null
     try {
         $target = $sh.CreateShortcut($t).TargetPath

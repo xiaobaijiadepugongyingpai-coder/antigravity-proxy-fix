@@ -35,7 +35,7 @@ $ErrorActionPreference = 'Continue'
 $launcher = Join-Path $env:USERPROFILE '.agy-shim\Antigravity-Proxy.cmd'
 $exe      = Join-Path $env:LOCALAPPDATA 'Programs\antigravity\Antigravity.exe'
 
-if (-not (Test-Path $launcher)) {
+if (-not (Test-Path -LiteralPath $launcher)) {
     Write-Host ("[self-heal] launcher missing: " + $launcher)
     exit 1
 }
@@ -51,7 +51,9 @@ $fixed = 0
 $failed = 0
 
 foreach ($t in $targets) {
-    if (-not (Test-Path $t)) { continue }
+    # -LiteralPath: a path containing [ or ] would otherwise be read as a
+    # wildcard and the shortcut would be skipped as "not found".
+    if (-not (Test-Path -LiteralPath $t)) { continue }
 
     # Read current state. A shortcut is already healthy only if BOTH the
     # target and the arguments are right; anything else needs a write.
@@ -85,7 +87,7 @@ foreach ($t in $targets) {
         $s.TargetPath       = $launcher
         $s.Arguments        = ''
         $s.WorkingDirectory = Split-Path $launcher
-        if (Test-Path $exe) { $s.IconLocation = $exe + ',0' }
+        if (Test-Path -LiteralPath $exe) { $s.IconLocation = $exe + ',0' }
         $s.WindowStyle      = 7
         $s.Description      = 'Antigravity (with proxy)'
         $s.Save()
@@ -107,9 +109,13 @@ foreach ($t in $targets) {
     }
 
     # A correct shortcut needs the right target AND no leftover arguments.
-    # Stale arguments (e.g. from a previous launcher variant) would be
-    # passed to the launcher and can break startup, so they count as a
-    # failed repair rather than a silent partial success.
+    # Stale arguments (e.g. from a previous launcher variant) mean the
+    # shortcut was not repaired to a clean known state, so this counts as
+    # a failed repair rather than a silent partial success.
+    # Note: the launcher ends with `start "" "%APP%"` and does not use %*,
+    # so leftover arguments are not actually forwarded to the app today.
+    # They are still treated as a repair failure because the shortcut is
+    # not in the exact state this script promises.
     if ($after -eq $launcher -and (-not $afterArgs -or $afterArgs.Trim() -eq '')) {
         $fixed++
         Write-Host ("[self-heal] repointed: " + $t)
@@ -137,6 +143,25 @@ if ($fixed -gt 0) {
 
 if ($failed -gt 0) {
     Write-Host ("[self-heal] " + $failed + " shortcut(s) could NOT be fixed.")
+
+    # The Startup shim (antigravity-self-heal.vbs) runs this script with a
+    # hidden window, does not wait for it, and discards the exit code. On
+    # that path the messages above are invisible, so a failed repair would
+    # otherwise leave no trace at all. Append a line to a log instead.
+    # Only written on failure: a healthy run stays completely silent and
+    # touches no disk, which is what keeps this safe to run at every logon.
+    try {
+        $logDir = Join-Path $env:USERPROFILE '.agy-shim'
+        if (Test-Path -LiteralPath $logDir) {
+            $logPath = Join-Path $logDir 'self-heal.log'
+            $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+            $line = $stamp + '  FAILED: ' + $failed + ' shortcut(s) could not be fixed.'
+            Add-Content -LiteralPath $logPath -Value $line -Encoding UTF8
+        }
+    } catch {
+        # Logging is best-effort; never let it change the outcome.
+    }
+
     exit 2
 }
 
