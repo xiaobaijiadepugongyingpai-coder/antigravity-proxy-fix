@@ -73,7 +73,9 @@ foreach ($t in $targets) {
     } catch {
         $target = $null
     }
-    if ($target -like '*.cmd') {
+    # Compare against the exact launcher path. A shortcut pointing at
+    # some OTHER .cmd is still wrong, so '*.cmd' is not a valid check.
+    if ($target -eq $launcher) {
         Write-Host ("  OK   " + $t)
     } else {
         if ($null -eq $target) {

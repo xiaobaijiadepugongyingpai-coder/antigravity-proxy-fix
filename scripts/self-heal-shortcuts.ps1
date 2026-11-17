@@ -65,7 +65,11 @@ foreach ($t in $targets) {
         continue
     }
 
-    if ($current -like '*.cmd') { continue }
+    # Already correct? Compare against the exact launcher path.
+    # Do NOT test for '*.cmd' here: a shortcut pointing at some OTHER
+    # .cmd is still broken, and treating it as healthy would make this
+    # script skip the fix and still exit 0.
+    if ($current -eq $launcher) { continue }
 
     # Attempt the write. Catch everything: an unwritable lnk must be
     # reported, not swallowed.
@@ -87,13 +91,20 @@ foreach ($t in $targets) {
     # without it, a failed save still printed "repointed" and counted
     # as fixed.
     $after = $null
+    $afterArgs = $null
     try {
-        $after = $sh.CreateShortcut($t).TargetPath
+        $rb = $sh.CreateShortcut($t)
+        $after = $rb.TargetPath
+        $afterArgs = $rb.Arguments
     } catch {
         $after = $null
     }
 
-    if ($after -eq $launcher) {
+    # A correct shortcut needs the right target AND no leftover arguments.
+    # Stale arguments (e.g. from a previous launcher variant) would be
+    # passed to the launcher and can break startup, so they count as a
+    # failed repair rather than a silent partial success.
+    if ($after -eq $launcher -and (-not $afterArgs -or $afterArgs.Trim() -eq '')) {
         $fixed++
         Write-Host ("[self-heal] repointed: " + $t)
     } else {
@@ -104,8 +115,10 @@ foreach ($t in $targets) {
         }
         if ($null -eq $after) {
             Write-Host ("             could not read the shortcut back")
-        } else {
+        } elseif ($after -ne $launcher) {
             Write-Host ("             still points at: " + $after)
+        } else {
+            Write-Host ("             target is correct but arguments were not cleared: '" + $afterArgs + "'")
         }
         Write-Host ("             hint: the file may be read-only or locked")
         Write-Host ("             try: attrib -R `"" + $t + "`"")
