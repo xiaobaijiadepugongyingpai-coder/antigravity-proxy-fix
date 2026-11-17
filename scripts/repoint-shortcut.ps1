@@ -42,16 +42,23 @@ foreach ($t in $targets) {
         continue
     }
 
-    $s = $sh.CreateShortcut($t)
-    $s.TargetPath       = $launcher
-    $s.Arguments        = ''
-    $s.WorkingDirectory = Split-Path $launcher
-    $s.IconLocation     = $exe + ',0'    # keep the original icon
-    $s.WindowStyle      = 7              # minimized, hide the cmd flash
-    $s.Description      = 'Antigravity (with proxy)'
-    $s.Save()
-
-    Write-Host ("updated: " + $t)
+    # Do not let one unwritable shortcut abort the remaining ones.
+    # The verify pass below is what decides success or failure.
+    try {
+        $s = $sh.CreateShortcut($t)
+        $s.TargetPath       = $launcher
+        $s.Arguments        = ''
+        $s.WorkingDirectory = Split-Path $launcher
+        $s.IconLocation     = $exe + ',0'    # keep the original icon
+        $s.WindowStyle      = 7              # minimized, hide the cmd flash
+        $s.Description      = 'Antigravity (with proxy)'
+        $s.Save()
+        Write-Host ("updated: " + $t)
+    } catch {
+        Write-Host ("update FAILED: " + $t)
+        Write-Host ("               " + $_.Exception.Message)
+        Write-Host ("               hint: file may be read-only; try: attrib -R `"" + $t + "`"")
+    }
 }
 
 # Always verify afterwards: bulk edits are the easiest place to miss one.
@@ -60,11 +67,20 @@ Write-Host '--- verify ---'
 $bad = 0
 foreach ($t in $targets) {
     if (-not (Test-Path $t)) { continue }
-    $target = $sh.CreateShortcut($t).TargetPath
+    $target = $null
+    try {
+        $target = $sh.CreateShortcut($t).TargetPath
+    } catch {
+        $target = $null
+    }
     if ($target -like '*.cmd') {
         Write-Host ("  OK   " + $t)
     } else {
-        Write-Host ("  FAIL " + $t + " -> " + $target) -ForegroundColor Red
+        if ($null -eq $target) {
+            Write-Host ("  FAIL " + $t + " -> (unreadable)") -ForegroundColor Red
+        } else {
+            Write-Host ("  FAIL " + $t + " -> " + $target) -ForegroundColor Red
+        }
         $bad++
     }
 }

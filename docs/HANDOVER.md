@@ -479,7 +479,8 @@ for f in glob.glob('scripts/*.ps1')+glob.glob('src/*.cmd'):
 "
 
 # 2. 脱敏检查（个人路径/账号/IP/策略组名）
-Select-String -Path docs\*.md -Pattern "<your-username>|<HOSTNAME-PREFIX>-|XX机场|61\.223|111\.246"
+# 替换 <your-username> / <HOSTNAME> 后再跑；不要把这些真实值写回本文件。
+Select-String -Path docs\*.md -Pattern "<your-username>|<HOSTNAME-PREFIX>-|XX机场|x\.x\.x\.x"
 
 # 3. PS 解析测试
 powershell -Command "foreach($f in Get-ChildItem scripts\*.ps1){ try{[scriptblock]::Create((Get-Content -Raw $f))|Out-Null; 'OK '+$f}catch{'FAIL '+$f} }"

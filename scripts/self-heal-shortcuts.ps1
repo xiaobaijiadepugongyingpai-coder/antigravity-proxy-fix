@@ -14,8 +14,17 @@ $ErrorActionPreference = 'Continue'
 #  healthy install produces no disk writes and no popups.
 #
 #  Exit codes:
-#    0 = everything already fine (or fixed successfully)
-#    1 = launcher missing / could not fix
+#    0 = everything already fine (or every needed fix verified OK)
+#    1 = launcher missing
+#    2 = one or more shortcuts could not be fixed (see output)
+#
+#  IMPORTANT: this script does not trust $s.Save() and does not
+#  report success just because it printed a line. After every save
+#  it reads the shortcut back and compares TargetPath against the
+#  expected launcher. A save that throws, silently no-ops, or gets
+#  reverted is reported as a failure -- never as a success.
+#  (Earlier versions printed "fixed N" and exited 0 even when the
+#  underlying save failed with UnauthorizedAccessException.)
 #
 #  NOTE: this file is intentionally pure ASCII (English only).
 #  Non-ASCII text in a .ps1 without a BOM is misread by
@@ -39,29 +48,77 @@ $targets = @(
 
 $sh = New-Object -ComObject WScript.Shell
 $fixed = 0
+$failed = 0
 
 foreach ($t in $targets) {
     if (-not (Test-Path $t)) { continue }
 
-    $s = $sh.CreateShortcut($t)
+    # Read current state. A shortcut that already resolves to the
+    # launcher needs no write at all (keeps this script idempotent).
+    $current = $null
+    try {
+        $current = $sh.CreateShortcut($t).TargetPath
+    } catch {
+        Write-Host ("[self-heal] FAILED to read: " + $t)
+        Write-Host ("             " + $_.Exception.Message)
+        $failed++
+        continue
+    }
 
-    # Already correct? Then do nothing at all (no writes, no noise).
-    if ($s.TargetPath -like '*.cmd') { continue }
+    if ($current -like '*.cmd') { continue }
 
-    $s.TargetPath       = $launcher
-    $s.Arguments        = ''
-    $s.WorkingDirectory = Split-Path $launcher
-    if (Test-Path $exe) { $s.IconLocation = $exe + ',0' }
-    $s.WindowStyle      = 7
-    $s.Description      = 'Antigravity (with proxy)'
-    $s.Save()
+    # Attempt the write. Catch everything: an unwritable lnk must be
+    # reported, not swallowed.
+    $saveError = $null
+    try {
+        $s = $sh.CreateShortcut($t)
+        $s.TargetPath       = $launcher
+        $s.Arguments        = ''
+        $s.WorkingDirectory = Split-Path $launcher
+        if (Test-Path $exe) { $s.IconLocation = $exe + ',0' }
+        $s.WindowStyle      = 7
+        $s.Description      = 'Antigravity (with proxy)'
+        $s.Save()
+    } catch {
+        $saveError = $_.Exception.Message
+    }
 
-    $fixed++
-    Write-Host ("[self-heal] repointed: " + $t)
+    # Read back and verify. This is the part the old version lacked:
+    # without it, a failed save still printed "repointed" and counted
+    # as fixed.
+    $after = $null
+    try {
+        $after = $sh.CreateShortcut($t).TargetPath
+    } catch {
+        $after = $null
+    }
+
+    if ($after -eq $launcher) {
+        $fixed++
+        Write-Host ("[self-heal] repointed: " + $t)
+    } else {
+        $failed++
+        Write-Host ("[self-heal] FAILED to repoint: " + $t)
+        if ($saveError) {
+            Write-Host ("             save error: " + $saveError)
+        }
+        if ($null -eq $after) {
+            Write-Host ("             could not read the shortcut back")
+        } else {
+            Write-Host ("             still points at: " + $after)
+        }
+        Write-Host ("             hint: the file may be read-only or locked")
+        Write-Host ("             try: attrib -R `"" + $t + "`"")
+    }
 }
 
 if ($fixed -gt 0) {
     Write-Host ("[self-heal] fixed " + $fixed + " shortcut(s) after an app update.")
+}
+
+if ($failed -gt 0) {
+    Write-Host ("[self-heal] " + $failed + " shortcut(s) could NOT be fixed.")
+    exit 2
 }
 
 exit 0
