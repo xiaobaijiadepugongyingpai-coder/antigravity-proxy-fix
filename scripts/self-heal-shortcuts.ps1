@@ -53,11 +53,17 @@ $failed = 0
 foreach ($t in $targets) {
     if (-not (Test-Path $t)) { continue }
 
-    # Read current state. A shortcut that already resolves to the
-    # launcher needs no write at all (keeps this script idempotent).
+    # Read current state. A shortcut is already healthy only if BOTH the
+    # target and the arguments are right; anything else needs a write.
+    # Checking just TargetPath here would skip a shortcut that points at
+    # the launcher but carries stale arguments, leaving it broken while
+    # the script exits 0.
     $current = $null
+    $currentArgs = $null
     try {
-        $current = $sh.CreateShortcut($t).TargetPath
+        $cur = $sh.CreateShortcut($t)
+        $current = $cur.TargetPath
+        $currentArgs = $cur.Arguments
     } catch {
         Write-Host ("[self-heal] FAILED to read: " + $t)
         Write-Host ("             " + $_.Exception.Message)
@@ -65,11 +71,11 @@ foreach ($t in $targets) {
         continue
     }
 
-    # Already correct? Compare against the exact launcher path.
+    # Healthy means: exact launcher target AND no leftover arguments.
     # Do NOT test for '*.cmd' here: a shortcut pointing at some OTHER
     # .cmd is still broken, and treating it as healthy would make this
     # script skip the fix and still exit 0.
-    if ($current -eq $launcher) { continue }
+    if ($current -eq $launcher -and (-not $currentArgs -or $currentArgs.Trim() -eq '')) { continue }
 
     # Attempt the write. Catch everything: an unwritable lnk must be
     # reported, not swallowed.
