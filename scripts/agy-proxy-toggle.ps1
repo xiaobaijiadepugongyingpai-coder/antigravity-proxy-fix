@@ -21,10 +21,27 @@ function Get-UserPathRaw {
     return $k.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
 }
 
+function Send-EnvChangeBroadcast {
+    try {
+        if (-not ('Win32.AgEnvNotify' -as [type])) {
+            $sig = @'
+[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+public static extern IntPtr SendMessageTimeoutW(
+    IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam,
+    uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+'@
+            Add-Type -Namespace Win32 -Name AgEnvNotify -MemberDefinition $sig -ErrorAction Stop | Out-Null
+        }
+        $res = [UIntPtr]::Zero
+        [Win32.AgEnvNotify]::SendMessageTimeoutW([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'Environment', 0x0002, 5000, [ref]$res) | Out-Null
+    } catch { }
+}
+
 function Set-UserPathRaw([string]$value) {
     [Microsoft.Win32.Registry]::SetValue(
         'HKEY_CURRENT_USER\Environment', 'Path', $value,
         [Microsoft.Win32.RegistryValueKind]::ExpandString)
+    Send-EnvChangeBroadcast
 }
 
 function Show-Status {

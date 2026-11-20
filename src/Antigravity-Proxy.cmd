@@ -12,7 +12,7 @@ REM  cannot reach Google, and the window stays stuck loading
 REM  (ERR_TIMED_OUT on https://127.0.0.1:PORT/).
 REM
 REM  This script changes nothing globally. It only sets env vars for the
-REM  Antigravity process it starts.
+REM  Antigravity process it starts, and forwards all CLI arguments (%*).
 REM ============================================================
 
 setlocal
@@ -42,6 +42,6 @@ if not exist "%APP%" (
 REM probe the proxy port; warn only, never block startup
 powershell -NoProfile -Command "$h=$env:HTTPS_PROXY -replace '^https?://',''; $p=[int]($h -split ':')[-1]; $ok=$false; try{ $c=New-Object Net.Sockets.TcpClient; $r=$c.BeginConnect('127.0.0.1',$p,$null,$null); $ok=$r.AsyncWaitHandle.WaitOne(800); if($ok){$c.EndConnect($r)}; $c.Close() }catch{}; if(-not $ok){ Write-Host ('[WARN] proxy port ' + $p + ' not responding; Clash may be off.') -ForegroundColor Yellow; Start-Sleep -Seconds 2 }"
 
-start "" "%APP%"
+start "" "%APP%" %*
 
 endlocal
