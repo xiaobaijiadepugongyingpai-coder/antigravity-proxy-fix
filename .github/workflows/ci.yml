@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-and-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check ASCII constraints and LF line endings
+        run: |
+          python3 - <<'PY'
+          import glob, pathlib, sys
+
+          failed = False
+
+          ascii_files = sorted(
+              glob.glob("scripts/*.ps1")
+              + glob.glob("scripts/*.vbs")
+              + glob.glob("src/*.cmd")
+              + glob.glob("src/*.cs")
+          )
+          for f in ascii_files:
+              data = pathlib.Path(f).read_bytes()
+              bad = sum(1 for b in data if b > 127)
+              if bad:
+                  print(f"FAIL [NON-ASCII={bad}]: {f}")
+                  failed = True
+              else:
+                  print(f"OK [ASCII]: {f}")
+
+          for f in sorted(glob.glob("linux/*.sh")):
+              data = pathlib.Path(f).read_bytes()
+              crlf = data.count(b"\r\n")
+              bad = sum(1 for b in data if b > 127)
+              if crlf or bad:
+                  print(f"FAIL [crlf={crlf}, non_ascii={bad}]: {f}")
+                  failed = True
+              else:
+                  print(f"OK [LF+ASCII]: {f}")
+
+          sys.exit(1 if failed else 0)
+          PY
+
+      - name: Check Bash and Python syntax
+        run: |
+          bash -n linux/proxy-wrapper.sh
+          bash -n linux/install-linux.sh
+          echo "BASH OK"
+          python3 -m py_compile scripts/query-mihomo.py scripts/diagnose-mode.py
+          echo "PYTHON OK"
+
+      - name: Smoke test Linux installer and wrappers
+        run: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "$TMP"' EXIT
+          export HOME="$TMP/home"
+          export XDG_CONFIG_HOME="$HOME/.config"
+          export XDG_DATA_HOME="$HOME/.local/share"
+          mkdir -p "$XDG_DATA_HOME/applications"
+          cat > "$XDG_DATA_HOME/applications/antigravity.desktop" <<'EOF'
+          [Desktop Entry]
+          Name=Antigravity
+          Exec=/opt/Antigravity/antigravity %F
+          Type=Application
+          EOF
+
+          bash linux/install-linux.sh --proxy 7897 --with-debug-port
+          grep -q -- "--remote-debugging-port=0" "$XDG_DATA_HOME/applications/antigravity.desktop"
+          grep -q -- "--remote-debugging-address=127.0.0.1" "$XDG_DATA_HOME/applications/antigravity.desktop"
+          "$HOME/.local/bin/agy" --shim-version
+          "$HOME/.local/bin/antigravity-proxy" --proxy-launcher-version
+          bash linux/install-linux.sh --status
+          bash linux/install-linux.sh --uninstall
+          test ! -e "$HOME/.local/bin/agy"
+          test ! -e "$HOME/.local/bin/antigravity-proxy"
+
+  windows-scripts-and-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse all PowerShell scripts
+        shell: powershell
+        run: |
+          foreach ($f in Get-ChildItem scripts\*.ps1) {
+            $tokens = $null; $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              Write-Error ("PS parse error in " + $f.Name + ": " + ($errors -join '; '))
+              exit 1
+            }
+            Write-Host ("PS-PARSE OK: " + $f.Name)
+          }
+
+      - name: Build AntigravityProxy.exe and AgyShim (agy.exe) with built-in csc.exe
+        shell: powershell
+        run: |
+          $outDir = Join-Path $env:RUNNER_TEMP 'agy-build'
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-desktop-launcher.ps1 -OutputPath (Join-Path $outDir 'AntigravityProxy.exe')
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-cli-shim.ps1 -OutputPath (Join-Path $outDir 'agy.exe')
+          $ver = & (Join-Path $outDir 'agy.exe') --version
+          Write-Host ("CLI shim version: " + $ver)
+          if ($ver -notmatch '^agy-shim ') { exit 1 }
+
+          $tmpHome = Join-Path $env:RUNNER_TEMP 'agy-uninstall-smoke'
+          New-Item -ItemType Directory -Force -Path $tmpHome | Out-Null
+          Copy-Item -Force (Join-Path $outDir 'AntigravityProxy.exe') (Join-Path $tmpHome 'AntigravityProxy.exe')
+          $lnk = Join-Path $tmpHome 'Antigravity.lnk'
+          $sh = New-Object -ComObject WScript.Shell
+          $s = $sh.CreateShortcut($lnk)
+          $s.TargetPath = Join-Path $tmpHome 'AntigravityProxy.exe'
+          $s.Arguments = '--remote-debugging-port=0 --remote-debugging-address=127.0.0.1'
+          $s.Save()
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\uninstall-windows.ps1 `
+            -DryRun -SkipPath -ShimHome $tmpHome -CliShimDir $outDir `
+            -StartupVbs (Join-Path $tmpHome 'missing.vbs') -ShortcutPaths @($lnk)
+          if (-not (Test-Path -LiteralPath (Join-Path $tmpHome 'AntigravityProxy.exe'))) { exit 1 }

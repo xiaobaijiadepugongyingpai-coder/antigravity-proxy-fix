@@ -2,8 +2,8 @@
 
 > 让 Google Antigravity 桌面版和 Antigravity CLI (`agy`) 在中国大陆网络环境下正常工作
 
-[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)]()
-[![Tested](https://img.shields.io/badge/tested-Antigravity%202.29.1%20%7C%20agy%201.5.3-green)]()
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20%7C%20Ubuntu%20%2F%20Linux-blue)]()
+[![Tested](https://img.shields.io/badge/tested-Antigravity%202.33%2B-green)]()
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)]()
 
 ---
@@ -57,19 +57,31 @@ Antigravity / agy ──注入 HTTPS_PROXY──> 127.0.0.1:7897
 
 ---
 
-## 快速开始
+## 快速开始（Windows）
 
 ### 1. 桌面版（Antigravity）
 
-```powershell
-# 下载 src/Antigravity-Proxy.cmd，放到 %USERPROFILE%\.agy-shim\
-# 修改里面的端口号（默认 7897）
+**推荐方式（零 MinGW 依赖，兼容 Dashboard 内嵌栏 & 防开始菜单被通知还原）：**
 
-# 然后运行 scripts/repoint-shortcut.ps1 改写快捷方式
+```powershell
+# 1) 用系统自带 csc.exe 编译无窗口启动器 AntigravityProxy.exe 到 %USERPROFILE%\.agy-shim\
+powershell -ExecutionPolicy Bypass -File .\scripts\build-desktop-launcher.ps1 -ProxyUrl http://127.0.0.1:7897
+
+# 2) 改写快捷方式指向 AntigravityProxy.exe（保留原有参数）
+#    -AddDebugPort     : 补齐 Antigrative Dashboard / antigravity-pulse 内嵌栏所需本地调试端口
+#    -ProtectStartMenu : 写回 Electron AppUserModelID 并对开始菜单快捷方式加只读(+R)，防止桌面通知静默还原
+powershell -ExecutionPolicy Bypass -File .\scripts\repoint-shortcut.ps1 -AddDebugPort -ProtectStartMenu
+```
+
+**传统 `.cmd` 方式（如仍希望使用纯批处理启动器）：**
+
+```powershell
+# 复制 src/Antigravity-Proxy.cmd（已支持 %* 参数透传）到 %USERPROFILE%\.agy-shim\ 并修改端口
+# 然后运行 scripts/repoint-shortcut.ps1（会自动保留快捷方式现有参数）
 powershell -ExecutionPolicy Bypass -File .\scripts\repoint-shortcut.ps1
 ```
 
-**强烈建议同时装自愈脚本。** Antigravity 用 Squirrel/Electron 更新框架，**每次更新都会重建开始菜单快捷方式**并还原成原始 exe——这会静默地让故障复发，而且桌面图标可能还正常，极难排查。
+**强烈建议同时装自愈脚本。** Antigravity 用 Squirrel/Electron 更新框架，每次更新会重建开始菜单快捷方式；运行时 Electron 的 Windows Toast 通知也会在 AUMID 不匹配时重写开始菜单快捷方式——自愈脚本会自动保留现有启动参数并写回 `electron.app.Antigravity`：
 
 ```powershell
 # 自愈脚本放这里
@@ -82,10 +94,18 @@ Copy-Item .\scripts\self-heal-shortcuts.vbs `
 
 ### 2. 命令行版（agy）
 
+**推荐方式（免装 MinGW，自带 `csc.exe` 编译并广播 `WM_SETTINGCHANGE`，共享 `proxy.conf`）：**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-cli-shim.ps1 -AddToPath
+```
+
+**传统方式（MinGW-w64 原生 C）：**
+
 ```powershell
 # 需要 MinGW-w64
 New-Item -ItemType Directory -Force -Path "$env:LOCALAPPDATA\agy\shim"
-gcc -O2 -s -Wall -o "$env:LOCALAPPDATA\agy\shim\agy.exe" src\agy-shim.c -lws2_32
+gcc -O2 -s -Wall -o "$env:LOCALAPPDATA\agy\shim\agy.exe" src\agy-shim.c -lws2_32 -lshell32
 
 # 加入 PATH 最前
 $shimDir = '%LOCALAPPDATA%\agy\shim'
@@ -96,12 +116,44 @@ $parts = $raw -split ';' | Where-Object { $_.Trim() -ne '' }
     ((@($shimDir) + $parts) -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)
 ```
 
-### 3. 验证
+### 3. 验证、诊断与一键卸载（Windows）
 
 ```powershell
+# 全面验证启动器、快捷方式、自愈脚本、端口延迟、全局环境变量与 CLI shim
+powershell -ExecutionPolicy Bypass -File .\scripts\verify-review.ps1
+
+# 一键诊断 Clash 模式/策略组与 Google/Antigravity 逐域名 TLS 连通性
+powershell -ExecutionPolicy Bypass -File .\scripts\diagnose-mode.ps1
+
+# 一键卸载（支持 -DryRun 预览，默认保留 proxy.conf，-Purge 彻底清理）
+powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-windows.ps1 -DryRun
+
+# 命令行验证
 (Get-Command agy).Source        # 应指向 ...\agy\shim\agy.exe
 agy -p "reply OK"               # 应返回 OK
 [Environment]::GetEnvironmentVariable('HTTPS_PROXY','User')   # 应为空
+```
+
+---
+
+## 快速开始（Ubuntu / Linux）
+
+Linux 下无需编译，CLI 与桌面版共用统一 multi-call Bash wrapper，通过 `exec` 透传 TTY/信号/参数/退出码，并以用户级 `~/.local/share/applications/antigravity.desktop` 覆盖系统项（软件包升级不会被重置）：
+
+```bash
+chmod +x linux/*.sh
+
+# 一键安装 ~/.local/bin/agy、~/.local/bin/antigravity-proxy 及用户级 .desktop
+# 若检测到 antigravity-pulse 会自动补齐本地调试端口参数（也可显式传 --with-debug-port）
+./linux/install-linux.sh --proxy http://127.0.0.1:7897
+
+# 确保 ~/.local/bin 在 PATH 最前（加到 ~/.bashrc 或 ~/.zshrc）
+export PATH="$HOME/.local/bin:$PATH"
+
+# 状态检查 / 跨平台诊断 / 卸载
+./linux/install-linux.sh --status
+python3 scripts/diagnose-mode.py
+./linux/install-linux.sh --uninstall
 ```
 
 ---
@@ -122,6 +174,8 @@ agy -p "reply OK"               # 应返回 OK
 
 ```
 .
+├── .github/workflows/ci.yml           # CI：ASCII / LF / PS / Bash / Linux 冒烟 / csc.exe 编译
+├── .gitattributes                     # 锁定 .sh / .py / .yml 为 LF，.ps1 / .cs / .vbs 为 CRLF
 ├── README.md                          # 本文件
 ├── LICENSE                            # MIT
 ├── docs/
@@ -135,15 +189,26 @@ agy -p "reply OK"               # 应返回 OK
 │       ├── 04-review-round2.md        # 第二轮复核（发现验证时效性盲区）
 │       └── 05-response-round2.md      # 第二次回应（版本自证 + 症状对照）
 ├── src/
+│   ├── ProxyCommon.cs                 # Windows 共享代理探活 / proxy.conf / 命令行截取模块
+│   ├── AntigravityProxy.cs            # Windows 桌面版无窗口启动器（自带 csc.exe 编译，透传参数）
+│   ├── AgyShim.cs                     # Windows CLI 转发器（自带 csc.exe 免 MinGW 编译）
 │   ├── agy-shim.c                     # CLI 转发器源码（C，v2.0.0 带版本自证）
-│   └── Antigravity-Proxy.cmd          # 桌面版启动器
+│   └── Antigravity-Proxy.cmd          # 桌面版启动器（批处理回退方案，支持 %* 参数透传）
+├── linux/
+│   ├── proxy-wrapper.sh               # Ubuntu/Linux 统一 multi-call wrapper（agy & antigravity-proxy）
+│   └── install-linux.sh               # Ubuntu/Linux 一键安装 / 状态 / 卸载脚本
 └── scripts/
-    ├── repoint-shortcut.ps1           # 改写快捷方式指向启动器（全量重写）
-    ├── self-heal-shortcuts.ps1        # 更新后自动修复（只在被还原时动手）
+    ├── build-desktop-launcher.ps1     # 编译 AntigravityProxy.exe 并管理 proxy.conf
+    ├── build-cli-shim.ps1             # 编译 AgyShim.cs 为 agy.exe 并广播 WM_SETTINGCHANGE
+    ├── repoint-shortcut.ps1           # 改写快捷方式指向启动器（保留原有参数，支持 -AddDebugPort / -ProtectStartMenu）
+    ├── self-heal-shortcuts.ps1        # 更新/通知后自动修复（只在被还原时动手，保留参数与 AUMID）
     ├── self-heal-shortcuts.vbs        # 启动项包装（无窗口）
     ├── agy-proxy-toggle.ps1           # agy shim 启用/撤销/查状态
-    ├── query-mihomo.py                # 查询 Clash 实际模式与节点
+    ├── query-mihomo.py                # 查询 Clash 实际模式与节点（Windows 命名管道 / Linux Unix socket & HTTP）
+    ├── diagnose-mode.ps1              # Windows 一键模式/节点/逐域名 TLS 诊断
+    ├── diagnose-mode.py               # 跨平台一键模式/节点/逐域名 TLS 诊断（Windows + Linux）
     ├── verify-review.ps1              # 全面验证脚本
+    ├── uninstall-windows.ps1          # Windows 一键卸载脚本（支持 -DryRun / -Purge）
     └── sysproxy-toggle.ps1            # 系统代理开关（测试用）
 ```
 
