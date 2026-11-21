@@ -21,10 +21,95 @@ function Get-UserPathRaw {
     return $k.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
 }
 
+function Send-EnvChangeBroadcast {
+    try {
+        if (-not ('Win32.AgEnvNotify' -as [type])) {
+            $sig = @'
+[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+public static extern IntPtr SendMessageTimeoutW(
+    IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam,
+    uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+'@
+            Add-Type -Namespace Win32 -Name AgEnvNotify -MemberDefinition $sig -ErrorAction Stop | Out-Null
+        }
+        $res = [UIntPtr]::Zero
+        [Win32.AgEnvNotify]::SendMessageTimeoutW([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero, 'Environment', 0x0002, 5000, [ref]$res) | Out-Null
+    } catch { }
+}
+
 function Set-UserPathRaw([string]$value) {
     [Microsoft.Win32.Registry]::SetValue(
         'HKEY_CURRENT_USER\Environment', 'Path', $value,
         [Microsoft.Win32.RegistryValueKind]::ExpandString)
+    Send-EnvChangeBroadcast
+}
+
+function ConvertTo-ProxyHostPort([string]$raw) {
+    if (-not $raw) { return $null }
+    $s = $raw.Trim().Trim('"').Trim("'")
+    if (-not $s) { return $null }
+    if ($s -match '^\d{1,5}$') {
+        $p = [int]$s
+        if ($p -ge 1 -and $p -le 65535) {
+            return @{ Host = '127.0.0.1'; Port = $p }
+        }
+        return $null
+    }
+    if ($s -notmatch '^[a-zA-Z][a-zA-Z0-9+.-]*://') {
+        $s = 'http://' + $s
+    }
+    try {
+        $u = [Uri]$s
+        if ($u.Host -and $u.Port -ge 1 -and $u.Port -le 65535) {
+            return @{ Host = $u.Host.Trim('[', ']'); Port = $u.Port }
+        }
+    } catch { }
+    return $null
+}
+
+function Read-ProxyConfRaw([string]$confPath) {
+    if (-not (Test-Path -LiteralPath $confPath)) { return $null }
+    foreach ($line in (Get-Content -LiteralPath $confPath -ErrorAction SilentlyContinue)) {
+        $t = $line.Trim()
+        if ($t -eq '' -or $t.StartsWith('#') -or $t.StartsWith(';')) { continue }
+        $eq = $t.IndexOf('=')
+        if ($eq -gt 0) {
+            $k = $t.Substring(0, $eq).Trim().ToUpperInvariant()
+            if ($k -in @('AGY_PROXY', 'ANTIGRAVITY_PROXY', 'HTTPS_PROXY', 'HTTP_PROXY', 'PROXY')) {
+                $t = $t.Substring($eq + 1).Trim()
+            }
+        }
+        return $t
+    }
+    return $null
+}
+
+function Resolve-ProxyEndpoints([string]$confPath) {
+    $candidates = @()
+    $envVal = [Environment]::GetEnvironmentVariable('AGY_PROXY', 'Process')
+    if ($envVal) {
+        $hp = ConvertTo-ProxyHostPort $envVal
+        if ($hp) { $candidates += @{ Host = $hp.Host; Port = $hp.Port; Tag = '[from AGY_PROXY]' } }
+    }
+    $confRaw = Read-ProxyConfRaw $confPath
+    if ($confRaw) {
+        $hp = ConvertTo-ProxyHostPort $confRaw
+        if ($hp) { $candidates += @{ Host = $hp.Host; Port = $hp.Port; Tag = '[from proxy.conf]' } }
+    }
+    foreach ($port in 7897, 7890, 10809) {
+        $candidates += @{ Host = '127.0.0.1'; Port = $port; Tag = '[fallback]' }
+    }
+
+    $seen = @{}
+    $unique = @()
+    foreach ($c in $candidates) {
+        $key = "{0}:{1}" -f $c.Host.ToLowerInvariant(), $c.Port
+        if (-not $seen.ContainsKey($key)) {
+            $seen[$key] = $true
+            $unique += $c
+        }
+    }
+    return ,$unique
 }
 
 function Show-Status {
@@ -62,19 +147,29 @@ function Show-Status {
         Write-Host ("  {0,-12} user={1}  machine={2}" -f $n, $sv, $sm)
     }
 
+    $confPath = Join-Path $env:USERPROFILE '.agy-shim\proxy.conf'
+    $confRaw = Read-ProxyConfRaw $confPath
     Write-Host ''
-    Write-Host '--- proxy port probe ---' -ForegroundColor Cyan
-    foreach ($port in 7897, 7890, 10809) {
+    Write-Host '--- proxy config & endpoint probe ---' -ForegroundColor Cyan
+    if ($confRaw) {
+        Write-Host ("  proxy.conf : {0} -> {1}" -f $confPath, $confRaw)
+    } else {
+        Write-Host ("  proxy.conf : {0} [not set]" -f $confPath)
+    }
+    foreach ($ep in (Resolve-ProxyEndpoints $confPath)) {
         $ok = $false
         try {
             $t = New-Object System.Net.Sockets.TcpClient
-            $iar = $t.BeginConnect('127.0.0.1', $port, $null, $null)
+            $iar = $t.BeginConnect($ep.Host, $ep.Port, $null, $null)
             $ok = $iar.AsyncWaitHandle.WaitOne(300)
             if ($ok) { $t.EndConnect($iar) }
             $t.Close()
         } catch { $ok = $false }
-        Write-Host ("  127.0.0.1:{0}  {1}" -f $port, $(if ($ok) { 'open' } else { 'closed' }))
+        $label = "{0}:{1}" -f $ep.Host, $ep.Port
+        $state = if ($ok) { 'open' } else { 'closed' }
+        Write-Host ("  {0,-22} {1,-7} {2}" -f $label, $state, $ep.Tag)
     }
+    Write-Host '  (fallback ports are only used when proxy.conf is unset or unreachable)'
 }
 
 function Enable-Shim {
