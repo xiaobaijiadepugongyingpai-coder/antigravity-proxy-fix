@@ -12,12 +12,20 @@
 
 ```powershell
 Get-Content "$env:APPDATA\Antigravity\wsl_state.json"
+# {"distro":"Ubuntu"}  → WSL 模式，需按本文处理
+# {"distro":""}        → 原生模式，直接使用主线方案
 ```
 
 | 输出 | 含义 |
 |---|---|
-| `{"distro":"Ubuntu"}`（或其它发行版） | **WSL 模式** → 本文适用，进程级注入不覆盖 |
-| 文件不存在 | Windows 原生模式 → 用 [README](../README.md) 的主线方案 |
+| `{"distro":"Ubuntu"}`（或其它发行版名） | **WSL 模式** → 本文适用，进程级注入不覆盖 |
+| `{"distro":""}`（空字符串） | Windows 原生模式 → 用 [README](../README.md) 的主线方案 |
+| 文件不存在 | Windows 原生模式 → 同上 |
+
+> ⚠️ **不要只看文件是否存在。** 实测中这个字段会在 WSL 模式与原生模式之间来回切换：
+> 一次更新后从 `{"distro":"Ubuntu"}` 变回 `{"distro":""}`，Antigravity 就回到了原生模式，
+> 此时本仓库的进程级注入直接有效，不需要处理 WSL。
+> **判据是 `distro` 字段是否有值，不是文件在不在。**
 
 ### 症状对照
 
