@@ -57,27 +57,157 @@ jobs:
         run: |
           set -euo pipefail
           TMP="$(mktemp -d)"
-          trap 'rm -rf "$TMP"' EXIT
-          export HOME="$TMP/home"
+          PROXY_PID=""
+          cleanup() {
+            [ -n "$PROXY_PID" ] && kill "$PROXY_PID" 2>/dev/null || true
+            rm -rf "$TMP"
+          }
+          trap cleanup EXIT
+
+          # Start ephemeral local TCP listener so proxy port probing succeeds
+          python3 - "$TMP/proxy.port" <<'PY' &
+          import socket, sys, time
+          srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+          srv.bind(("127.0.0.1", 0))
+          srv.listen(16)
+          with open(sys.argv[1], "w") as f:
+              f.write(str(srv.getsockname()[1]))
+          while True:
+              try:
+                  conn, _ = srv.accept()
+                  conn.close()
+              except Exception:
+                  time.sleep(0.05)
+          PY
+          PROXY_PID=$!
+          for _ in $(seq 1 40); do
+            [ -s "$TMP/proxy.port" ] && break
+            sleep 0.05
+          done
+          PORT="$(cat "$TMP/proxy.port")"
+          echo "Ephemeral proxy listener port: $PORT"
+
+          # --- Scenario A: Tarball ./Antigravity + official ~/.local/bin/agy, no system .desktop ---
+          export HOME="$TMP/homeA"
           export XDG_CONFIG_HOME="$HOME/.config"
           export XDG_DATA_HOME="$HOME/.local/share"
-          mkdir -p "$XDG_DATA_HOME/applications"
+          mkdir -p "$HOME/.local/bin" "$TMP/Downloads/Antigravity/resources/app/resources/linux"
+          touch "$TMP/Downloads/Antigravity/resources/app/resources/linux/code.png"
+
+          cat > "$HOME/.local/bin/agy" <<'EOF'
+          #!/usr/bin/env bash
+          printf 'OFFICIAL_AGY HTTPS_PROXY=%s NO_PROXY=%s ARGS=%s\n' "${HTTPS_PROXY:-}" "${NO_PROXY:-}" "$*"
+          EOF
+          chmod +x "$HOME/.local/bin/agy"
+          ORIG_AGY_SHA="$(sha256sum "$HOME/.local/bin/agy" | awk '{print $1}')"
+
+          cat > "$TMP/Downloads/Antigravity/Antigravity" <<'EOF'
+          #!/usr/bin/env python3
+          import json, os, sys
+          print(json.dumps({
+              "argv": sys.argv[1:],
+              "HTTPS_PROXY": os.environ.get("HTTPS_PROXY", ""),
+              "HTTP_PROXY": os.environ.get("HTTP_PROXY", ""),
+              "NO_PROXY": os.environ.get("NO_PROXY", ""),
+          }))
+          EOF
+          chmod +x "$TMP/Downloads/Antigravity/Antigravity"
+
+          bash linux/install-linux.sh --proxy "$PORT" --app-bin "$TMP/Downloads/Antigravity" --with-debug-port
+          test "$(sha256sum "$HOME/.local/bin/agy" | awk '{print $1}')" = "$ORIG_AGY_SHA"
+
+          "$HOME/.local/share/agy-proxy/bin/agy" --shim-version
+          "$HOME/.local/bin/antigravity-proxy" --proxy-launcher-version
+
+          CLI_OUT="$(env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy -u NO_PROXY -u no_proxy \
+            PATH="$HOME/.local/share/agy-proxy/bin:$HOME/.local/bin:$PATH" agy --ping)"
+          echo "$CLI_OUT"
+          grep -q "OFFICIAL_AGY HTTPS_PROXY=http://127.0.0.1:$PORT NO_PROXY=localhost,127.0.0.1,::1 ARGS=--ping" <<<"$CLI_OUT"
+
+          DESKTOP_A="$XDG_DATA_HOME/applications/antigravity.desktop"
+          grep -q "antigravity-proxy" "$DESKTOP_A"
+          grep -q -- "--remote-debugging-port=0" "$DESKTOP_A"
+          grep -q -- "--remote-debugging-address=127.0.0.1" "$DESKTOP_A"
+          grep -q "Path=$TMP/Downloads/Antigravity" "$DESKTOP_A"
+          grep -q "Icon=$TMP/Downloads/Antigravity/resources/app/resources/linux/code.png" "$DESKTOP_A"
+          grep -q "X-Antigravity-Proxy-Generated=true" "$DESKTOP_A"
+
+          GUI_OUT="$(env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy -u NO_PROXY -u no_proxy \
+            "$HOME/.local/bin/antigravity-proxy" --user-flag)"
+          echo "$GUI_OUT"
+          python3 - "$GUI_OUT" "$PORT" <<'PY'
+          import json, sys
+          data = json.loads(sys.argv[1])
+          port = sys.argv[2]
+          expected = f"http://127.0.0.1:{port}"
+          assert data["HTTPS_PROXY"] == expected, data
+          assert data["HTTP_PROXY"] == expected, data
+          assert data["NO_PROXY"] == "localhost,127.0.0.1,::1", data
+          assert f"--proxy-server={expected}" in data["argv"], data
+          assert "--proxy-bypass-list=localhost;127.0.0.1;[::1]" in data["argv"], data
+          assert "--user-flag" in data["argv"], data
+          PY
+
+          GUI_NOPROXY="$(env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy \
+            "$HOME/.local/bin/antigravity-proxy" --no-proxy-server --user-flag)"
+          python3 - "$GUI_NOPROXY" <<'PY'
+          import json, sys
+          data = json.loads(sys.argv[1])
+          assert not any(a.startswith("--proxy-server") for a in data["argv"]), data
+          assert "--no-proxy-server" in data["argv"], data
+          PY
+
+          PATH="$HOME/.local/share/agy-proxy/bin:$HOME/.local/bin:$PATH" bash linux/install-linux.sh --status
+          bash linux/install-linux.sh --uninstall
+          test -f "$HOME/.local/bin/agy"
+          test "$(sha256sum "$HOME/.local/bin/agy" | awk '{print $1}')" = "$ORIG_AGY_SHA"
+          test ! -e "$HOME/.local/share/agy-proxy/bin/agy"
+          test ! -e "$HOME/.local/bin/antigravity-proxy"
+          test ! -e "$DESKTOP_A"
+          test ! -e "$XDG_CONFIG_HOME/agy-proxy/app-bin.conf"
+
+          # --- Scenario B: Existing .desktop override, legacy wrapper migration, and backup restore ---
+          export HOME="$TMP/homeB"
+          export XDG_CONFIG_HOME="$HOME/.config"
+          export XDG_DATA_HOME="$HOME/.local/share"
+          mkdir -p "$HOME/.local/bin" "$XDG_DATA_HOME/applications"
+          cat > "$HOME/.local/bin/agy" <<'EOF'
+          #!/usr/bin/env bash
+          # legacy v2.1.0 wrapper marker: agy-shim-linux
+          exit 0
+          EOF
+          chmod +x "$HOME/.local/bin/agy"
           cat > "$XDG_DATA_HOME/applications/antigravity.desktop" <<'EOF'
           [Desktop Entry]
           Name=Antigravity
-          Exec=/opt/Antigravity/antigravity %F
+          Exec=/opt/Antigravity/Antigravity %F
           Type=Application
           EOF
 
-          bash linux/install-linux.sh --proxy 7897 --with-debug-port
+          bash linux/install-linux.sh --proxy "$PORT" --with-debug-port
+          test ! -e "$HOME/.local/bin/agy"
+          test -x "$HOME/.local/share/agy-proxy/bin/agy"
           grep -q -- "--remote-debugging-port=0" "$XDG_DATA_HOME/applications/antigravity.desktop"
           grep -q -- "--remote-debugging-address=127.0.0.1" "$XDG_DATA_HOME/applications/antigravity.desktop"
-          "$HOME/.local/bin/agy" --shim-version
-          "$HOME/.local/bin/antigravity-proxy" --proxy-launcher-version
-          bash linux/install-linux.sh --status
           bash linux/install-linux.sh --uninstall
-          test ! -e "$HOME/.local/bin/agy"
+          grep -q "Exec=/opt/Antigravity/Antigravity %F" "$XDG_DATA_HOME/applications/antigravity.desktop"
+          test ! -e "$HOME/.local/share/agy-proxy/bin/agy"
           test ! -e "$HOME/.local/bin/antigravity-proxy"
+
+          # --- Scenario C: CWD ./Antigravity fallback when app-bin.conf is absent ---
+          export HOME="$TMP/homeC"
+          export XDG_CONFIG_HOME="$HOME/.config"
+          export XDG_DATA_HOME="$HOME/.local/share"
+          mkdir -p "$TMP/cwdApp"
+          cat > "$TMP/cwdApp/Antigravity" <<'EOF'
+          #!/usr/bin/env bash
+          printf 'CWD_OK:%s\n' "$*"
+          EOF
+          chmod +x "$TMP/cwdApp/Antigravity"
+          bash linux/install-linux.sh
+          test ! -e "$XDG_CONFIG_HOME/agy-proxy/app-bin.conf"
+          CWD_OUT="$(cd "$TMP/cwdApp" && env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy "$HOME/.local/bin/antigravity-proxy" --cwd-arg)"
+          test "$CWD_OUT" = "CWD_OK:--cwd-arg"
 
   windows-scripts-and-build:
     runs-on: windows-latest

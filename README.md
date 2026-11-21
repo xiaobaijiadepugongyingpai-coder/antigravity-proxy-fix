@@ -138,19 +138,27 @@ agy -p "reply OK"               # 应返回 OK
 
 ## 快速开始（Ubuntu / Linux）
 
-Linux 下无需编译，CLI 与桌面版共用统一 multi-call Bash wrapper，通过 `exec` 透传 TTY/信号/参数/退出码，并以用户级 `~/.local/share/applications/antigravity.desktop` 覆盖系统项（软件包升级不会被重置）：
+Linux 下无需编译，CLI 与桌面版共用统一 multi-call Bash wrapper，通过 `exec` 透传 TTY/信号/参数/退出码。同时适配官方 `.tar.gz` 解压即用（`./Antigravity`）与官方 CLI 安装脚本（`~/.local/bin/agy`）：
+
+- **不会覆盖官方 `~/.local/bin/agy`**：CLI 代理包装器安装到 `~/.local/share/agy-proxy/bin/agy`，只需在 `PATH` 中排在 `~/.local/bin` 之前即可。
+- **自动生成桌面图标**：若通过 `tar -xzf Antigravity.tar.gz` 解压且系统无 `.desktop`，传入 `--app-bin`（或自动探测）即可创建用户级 `~/.local/share/applications/antigravity.desktop`；若系统已有 `.desktop` 则创建用户级覆盖（升级软件不会被重置）。
+- **GNOME 桌面环境兼容**：Ubuntu GNOME 下的 Chromium/Electron 会优先读 `gsettings` 而忽略 `HTTPS_PROXY`，桌面包装器会在检测到可用代理时自动附加 `--proxy-server` 与 `--proxy-bypass-list`。
 
 ```bash
+# 假设已解压官方压缩包：tar -xzf Antigravity.tar.gz（例如在 ~/Downloads/Antigravity）
 chmod +x linux/*.sh
 
-# 一键安装 ~/.local/bin/agy、~/.local/bin/antigravity-proxy 及用户级 .desktop
+# 一键安装包装器并指定解压目录（也可直接传 ./Antigravity 可执行文件路径；省略时自动探测）
 # 若检测到 antigravity-pulse 会自动补齐本地调试端口参数（也可显式传 --with-debug-port）
-./linux/install-linux.sh --proxy http://127.0.0.1:7897
+./linux/install-linux.sh --proxy http://127.0.0.1:7897 --app-bin ~/Downloads/Antigravity
 
-# 确保 ~/.local/bin 在 PATH 最前（加到 ~/.bashrc 或 ~/.zshrc）
-export PATH="$HOME/.local/bin:$PATH"
+# 确保 shim 目录排在 ~/.local/bin 之前（写入 ~/.bashrc 或 ~/.zshrc）
+export PATH="$HOME/.local/share/agy-proxy/bin:$HOME/.local/bin:$PATH"
 
-# 状态检查 / 跨平台诊断 / 卸载
+# 也可直接在解压目录内运行桌面包装器（无配置时会自动探测当前目录的 ./Antigravity）
+antigravity-proxy
+
+# 状态检查 / 跨平台诊断 / 卸载（默认保留 proxy.conf，绝不删除官方 ~/.local/bin/agy）
 ./linux/install-linux.sh --status
 python3 scripts/diagnose-mode.py
 ./linux/install-linux.sh --uninstall
