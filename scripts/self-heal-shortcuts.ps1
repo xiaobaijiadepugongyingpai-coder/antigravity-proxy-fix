@@ -20,11 +20,17 @@ $ErrorActionPreference = 'Continue'
 #
 #  IMPORTANT: this script does not trust $s.Save() and does not
 #  report success just because it printed a line. After every save
-#  it reads the shortcut back and compares TargetPath against the
-#  expected launcher. A save that throws, silently no-ops, or gets
-#  reverted is reported as a failure -- never as a success.
+#  it reads the shortcut back and compares TargetPath and Arguments
+#  against expected values. A save that throws, silently no-ops, or
+#  gets reverted is reported as a failure -- never as a success.
 #  (Earlier versions printed "fixed N" and exited 0 even when the
 #  underlying save failed with UnauthorizedAccessException.)
+#
+#  Existing shortcut Arguments (such as AntigravityPulse's
+#  --remote-debugging-port=0 --remote-debugging-address=127.0.0.1)
+#  are ALWAYS preserved, never cleared. If an app update wiped a
+#  Start Menu shortcut's arguments while a sibling shortcut still
+#  carries them, self-heal restores them automatically.
 #
 #  NOTE: this file is intentionally pure ASCII (English only).
 #  Non-ASCII text in a .ps1 without a BOM is misread by
@@ -47,6 +53,22 @@ $targets = @(
 )
 
 $sh = New-Object -ComObject WScript.Shell
+
+# Detect whether any existing shortcut carries --remote-debugging-port=
+# (e.g. set by AntigravityPulse), so that if Squirrel/Electron wiped a
+# Start Menu shortcut's arguments on update, we restore them cleanly.
+$peerHasDebugPort = $false
+foreach ($t in $targets) {
+    if (-not (Test-Path -LiteralPath $t)) { continue }
+    try {
+        $peerArgs = [string]($sh.CreateShortcut($t).Arguments)
+        if ($peerArgs -match '--remote-debugging-port=') {
+            $peerHasDebugPort = $true
+            break
+        }
+    } catch { }
+}
+
 $fixed = 0
 $failed = 0
 
@@ -55,17 +77,13 @@ foreach ($t in $targets) {
     # wildcard and the shortcut would be skipped as "not found".
     if (-not (Test-Path -LiteralPath $t)) { continue }
 
-    # Read current state. A shortcut is already healthy only if BOTH the
-    # target and the arguments are right; anything else needs a write.
-    # Checking just TargetPath here would skip a shortcut that points at
-    # the launcher but carries stale arguments, leaving it broken while
-    # the script exits 0.
+    # Read current state.
     $current = $null
-    $currentArgs = $null
+    $currentArgs = ''
     try {
         $cur = $sh.CreateShortcut($t)
         $current = $cur.TargetPath
-        $currentArgs = $cur.Arguments
+        $currentArgs = if ($null -eq $cur.Arguments) { '' } else { [string]$cur.Arguments }
     } catch {
         Write-Host ("[self-heal] FAILED to read: " + $t)
         Write-Host ("             " + $_.Exception.Message)
@@ -73,11 +91,16 @@ foreach ($t in $targets) {
         continue
     }
 
-    # Healthy means: exact launcher target AND no leftover arguments.
-    # Do NOT test for '*.cmd' here: a shortcut pointing at some OTHER
-    # .cmd is still broken, and treating it as healthy would make this
-    # script skip the fix and still exit 0.
-    if ($current -eq $launcher -and (-not $currentArgs -or $currentArgs.Trim() -eq '')) { continue }
+    # Healthy means: exact launcher target. Do NOT test for '*.cmd' here:
+    # a shortcut pointing at some OTHER .cmd is still broken. Valid plugin
+    # arguments (such as --remote-debugging-port=0) MUST be preserved, not
+    # treated as unhealthy or wiped.
+    if ($current -eq $launcher) { continue }
+
+    $desiredArgs = $currentArgs
+    if ($desiredArgs.Trim() -eq '' -and $peerHasDebugPort) {
+        $desiredArgs = '--remote-debugging-port=0 --remote-debugging-address=127.0.0.1'
+    }
 
     # Attempt the write. Catch everything: an unwritable lnk must be
     # reported, not swallowed.
@@ -85,7 +108,7 @@ foreach ($t in $targets) {
     try {
         $s = $sh.CreateShortcut($t)
         $s.TargetPath       = $launcher
-        $s.Arguments        = ''
+        $s.Arguments        = $desiredArgs
         $s.WorkingDirectory = Split-Path $launcher
         if (Test-Path -LiteralPath $exe) { $s.IconLocation = $exe + ',0' }
         $s.WindowStyle      = 7
@@ -95,30 +118,26 @@ foreach ($t in $targets) {
         $saveError = $_.Exception.Message
     }
 
-    # Read back and verify. This is the part the old version lacked:
-    # without it, a failed save still printed "repointed" and counted
-    # as fixed.
+    # Read back and verify both TargetPath and Arguments. This is the part
+    # the old version lacked: without it, a failed save still printed
+    # "repointed" and counted as fixed.
     $after = $null
-    $afterArgs = $null
+    $afterArgs = ''
     try {
         $rb = $sh.CreateShortcut($t)
         $after = $rb.TargetPath
-        $afterArgs = $rb.Arguments
+        $afterArgs = if ($null -eq $rb.Arguments) { '' } else { [string]$rb.Arguments }
     } catch {
         $after = $null
     }
 
-    # A correct shortcut needs the right target AND no leftover arguments.
-    # Stale arguments (e.g. from a previous launcher variant) mean the
-    # shortcut was not repaired to a clean known state, so this counts as
-    # a failed repair rather than a silent partial success.
-    # Note: the launcher ends with `start "" "%APP%"` and does not use %*,
-    # so leftover arguments are not actually forwarded to the app today.
-    # They are still treated as a repair failure because the shortcut is
-    # not in the exact state this script promises.
-    if ($after -eq $launcher -and (-not $afterArgs -or $afterArgs.Trim() -eq '')) {
+    if ($after -eq $launcher -and $afterArgs -eq $desiredArgs) {
         $fixed++
-        Write-Host ("[self-heal] repointed: " + $t)
+        if ($desiredArgs -ne '') {
+            Write-Host ("[self-heal] repointed: " + $t + "  (args: " + $desiredArgs + ")")
+        } else {
+            Write-Host ("[self-heal] repointed: " + $t)
+        }
     } else {
         $failed++
         Write-Host ("[self-heal] FAILED to repoint: " + $t)
@@ -130,7 +149,7 @@ foreach ($t in $targets) {
         } elseif ($after -ne $launcher) {
             Write-Host ("             still points at: " + $after)
         } else {
-            Write-Host ("             target is correct but arguments were not cleared: '" + $afterArgs + "'")
+            Write-Host ("             target is correct but arguments mismatch: got '" + $afterArgs + "', expected '" + $desiredArgs + "'")
         }
         Write-Host ("             hint: the file may be read-only or locked")
         Write-Host ("             try: attrib -R `"" + $t + "`"")
