@@ -15,20 +15,36 @@ $confPath    = Join-Path $shimHome 'proxy.conf'
 $cliShimDir  = Join-Path $env:LOCALAPPDATA 'agy\shim'
 $cliShimExe  = Join-Path $cliShimDir 'agy.exe'
 
-function Resolve-ConfiguredPort {
+function Resolve-ConfiguredEndpoint {
     if (Test-Path -LiteralPath $confPath) {
         foreach ($line in (Get-Content -LiteralPath $confPath -ErrorAction SilentlyContinue)) {
             $t = $line.Trim()
             if ($t -eq '' -or $t.StartsWith('#') -or $t.StartsWith(';')) { continue }
-            if ($t -match ':(\d{2,5})\b') { return [int]$Matches[1] }
-            if ($t -match '^\d{2,5}$') { return [int]$t }
+            $eq = $t.IndexOf('=')
+            if ($eq -gt 0) {
+                $k = $t.Substring(0, $eq).Trim().ToUpperInvariant()
+                if ($k -in @('AGY_PROXY', 'ANTIGRAVITY_PROXY', 'HTTPS_PROXY', 'HTTP_PROXY', 'PROXY')) {
+                    $t = $t.Substring($eq + 1).Trim()
+                }
+            }
+            $s = $t.Trim().Trim('"').Trim("'")
+            if ($s -match '^\d{1,5}$') {
+                return @{ Host = '127.0.0.1'; Port = [int]$s; Source = 'proxy.conf' }
+            }
+            $uStr = if ($s -match '^[a-zA-Z][a-zA-Z0-9+.-]*://') { $s } else { 'http://' + $s }
+            try {
+                $u = [Uri]$uStr
+                if ($u.Host -and $u.Port -ge 1 -and $u.Port -le 65535) {
+                    return @{ Host = $u.Host.Trim('[', ']'); Port = $u.Port; Source = 'proxy.conf' }
+                }
+            } catch { }
         }
     }
     if (Test-Path -LiteralPath $cmdLauncher) {
         $m = Select-String -LiteralPath $cmdLauncher -Pattern 'ANTIGRAVITY_PROXY=.*:(\d{2,5})' | Select-Object -First 1
-        if ($m) { return [int]$m.Matches[0].Groups[1].Value }
+        if ($m) { return @{ Host = '127.0.0.1'; Port = [int]$m.Matches[0].Groups[1].Value; Source = 'Antigravity-Proxy.cmd' } }
     }
-    return 7897
+    return @{ Host = '127.0.0.1'; Port = 7897; Source = 'fallback default' }
 }
 
 Write-Host '=== 1. desktop launcher & config ==='
@@ -88,15 +104,15 @@ $healVbs = Join-Path $startupDir 'self-heal-shortcuts.vbs'
 Write-Host ("  self-heal-shortcuts.ps1 : {0}" -f $(if (Test-Path -LiteralPath $healPs1) { '[found]' } else { '[missing]' }))
 Write-Host ("  Startup VBS             : {0}" -f $(if (Test-Path -LiteralPath $healVbs) { '[found]' } else { '[missing]' }))
 
-$probePort = Resolve-ConfiguredPort
+$probeEndpoint = Resolve-ConfiguredEndpoint
 Write-Host ''
-Write-Host ("=== 4. proxy port probe latency (127.0.0.1:{0}, 3 runs) ===" -f $probePort)
+Write-Host ("=== 4. proxy port probe latency ({0}:{1} [{2}], 3 runs) ===" -f $probeEndpoint.Host, $probeEndpoint.Port, $probeEndpoint.Source)
 for ($i = 1; $i -le 3; $i++) {
     $t0 = Get-Date
     $ok = $false
     try {
         $c = New-Object Net.Sockets.TcpClient
-        $r = $c.BeginConnect('127.0.0.1', $probePort, $null, $null)
+        $r = $c.BeginConnect($probeEndpoint.Host, $probeEndpoint.Port, $null, $null)
         $ok = $r.AsyncWaitHandle.WaitOne(800)
         if ($ok) { $c.EndConnect($r) }
         $c.Close()

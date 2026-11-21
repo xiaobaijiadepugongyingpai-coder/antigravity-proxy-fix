@@ -57,7 +57,28 @@ Antigravity / agy ──注入 HTTPS_PROXY──> 127.0.0.1:7897
 
 ---
 
+## 代理端口与查找优先级（不写死任何端口）
+
+> 下文示例中的 `7897`、`7890` 仅为常见代理端口示例，实际请替换成**你自己的代理端口**（例如 v2rayN 常见 `10808`/`10809`，Clash 常见 `7897`/`7890`，局域网代理 `http://192.168.x.x:端口`，或 `socks5://127.0.0.1:1080`）。
+
+Windows 启动器/CLI shim 与 Linux 包装器采用完全一致的 4 级解析顺序，**每次启动时都会先 TCP 探活再注入**（代理关闭时绝不误注入）：
+
+| 优先级 | 来源 | 说明 |
+|---|---|---|
+| **1** | `HTTPS_PROXY` / `HTTP_PROXY`（含小写） | 终端当前已显式配置代理时，原样放行不覆盖 |
+| **2** | `ANTIGRAVITY_PROXY`（桌面）/ `AGY_PROXY`（CLI） | 仅作用于本工具的专属环境变量，可写 URL 或纯端口号 |
+| **3** | `proxy.conf` 配置文件 | Windows 位于 `%USERPROFILE%\.agy-shim\proxy.conf`；Linux 位于 `~/.config/agy-proxy/proxy.conf`（支持纯端口、`host:port`、`http://...`、`socks5://...`、`PROXY=...`） |
+| **4** | `[fallback]` 默认回退探测 | **仅当上述配置未设置或均不可达时**，才依次回退探测 `127.0.0.1:7897` → `7890` → `10809` |
+
+> 自检脚本在检查端口时，会优先探测你在 `proxy.conf` 中设置的地址并标注 `[from proxy.conf]`，`7897 / 7890 / 10809` 会明确标注为 `[fallback]`。
+
+---
+
 ## 快速开始（Windows）
+
+> 如首次运行 `.ps1` 遇到「在此系统上禁止运行脚本」，先执行：
+> `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned`
+> 安装脚本会自动创建 `%USERPROFILE%\.agy-shim` 等所需目录，无需手动新建。
 
 ### 1. 桌面版（Antigravity）
 
@@ -65,6 +86,7 @@ Antigravity / agy ──注入 HTTPS_PROXY──> 127.0.0.1:7897
 
 ```powershell
 # 1) 用系统自带 csc.exe 编译无窗口启动器 AntigravityProxy.exe 到 %USERPROFILE%\.agy-shim\
+#    将 7897 换成你的实际代理端口（写入 %USERPROFILE%\.agy-shim\proxy.conf）
 powershell -ExecutionPolicy Bypass -File .\scripts\build-desktop-launcher.ps1 -ProxyUrl http://127.0.0.1:7897
 
 # 2) 改写快捷方式指向 AntigravityProxy.exe（保留原有参数）
@@ -72,6 +94,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-desktop-launcher.ps1 -P
 #    -ProtectStartMenu : 写回 Electron AppUserModelID 并对开始菜单快捷方式加只读(+R)，防止桌面通知静默还原
 powershell -ExecutionPolicy Bypass -File .\scripts\repoint-shortcut.ps1 -AddDebugPort -ProtectStartMenu
 ```
+
+> 后续修改代理端口只需编辑 `%USERPROFILE%\.agy-shim\proxy.conf`（或重跑 `build-desktop-launcher.ps1 -ProxyUrl http://127.0.0.1:<新端口>`），**无需重新改写快捷方式或重新编译**。
 
 **传统 `.cmd` 方式（如仍希望使用纯批处理启动器）：**
 
@@ -100,6 +124,8 @@ Copy-Item .\scripts\self-heal-shortcuts.vbs `
 powershell -ExecutionPolicy Bypass -File .\scripts\build-cli-shim.ps1 -AddToPath
 ```
 
+> 若新机尚未跑过桌面版脚本，只要保证 `%USERPROFILE%\.agy-shim\proxy.conf` 已写入你的代理地址（或由 `build-desktop-launcher.ps1` 自动生成），`agy` CLI 与桌面版会自动共享同一份配置；随时可用 `.\scripts\agy-proxy-toggle.ps1` 停用、恢复或查看状态。
+
 **传统方式（MinGW-w64 原生 C）：**
 
 ```powershell
@@ -119,17 +145,18 @@ $parts = $raw -split ';' | Where-Object { $_.Trim() -ne '' }
 ### 3. 验证、诊断与一键卸载（Windows）
 
 ```powershell
-# 全面验证启动器、快捷方式、自愈脚本、端口延迟、全局环境变量与 CLI shim
+# 全面验证启动器、快捷方式、自愈脚本、proxy.conf 端口延迟、全局环境变量与 CLI shim
 powershell -ExecutionPolicy Bypass -File .\scripts\verify-review.ps1
 
 # 一键诊断 Clash 模式/策略组与 Google/Antigravity 逐域名 TLS 连通性
 powershell -ExecutionPolicy Bypass -File .\scripts\diagnose-mode.ps1
 
-# 一键卸载（支持 -DryRun 预览，默认保留 proxy.conf，-Purge 彻底清理）
+# 一键卸载（支持 -DryRun 预览，默认保留 proxy.conf，传 -Purge 彻底清理）
 powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-windows.ps1 -DryRun
 
-# 命令行验证
+# 命令行验证（重开终端后）
 (Get-Command agy).Source        # 应指向 ...\agy\shim\agy.exe
+agy --version                   # 应输出 agy-shim 2.1.0 (cs)
 agy -p "reply OK"               # 应返回 OK
 [Environment]::GetEnvironmentVariable('HTTPS_PROXY','User')   # 应为空
 ```
@@ -138,31 +165,79 @@ agy -p "reply OK"               # 应返回 OK
 
 ## 快速开始（Ubuntu / Linux）
 
-Linux 下无需编译，CLI 与桌面版共用统一 multi-call Bash wrapper，通过 `exec` 透传 TTY/信号/参数/退出码。同时适配官方 `.tar.gz` 解压即用（`./Antigravity`）与官方 CLI 安装脚本（`~/.local/bin/agy`）：
+Linux 下无需编译，CLI 与桌面版共用统一 multi-call Bash wrapper（[linux/proxy-wrapper.sh](linux/proxy-wrapper.sh)），通过 `exec` 透传 TTY/信号/参数/退出码。同时适配官方 `.tar.gz` 解压即用（`./Antigravity` / `./antigravity`）与官方 CLI（`~/.local/bin/agy`）：
 
-- **不会覆盖官方 `~/.local/bin/agy`**：CLI 代理包装器安装到 `~/.local/share/agy-proxy/bin/agy`，只需在 `PATH` 中排在 `~/.local/bin` 之前即可。
-- **自动生成桌面图标**：若通过 `tar -xzf Antigravity.tar.gz` 解压且系统无 `.desktop`，传入 `--app-bin`（或自动探测）即可创建用户级 `~/.local/share/applications/antigravity.desktop`；若系统已有 `.desktop` 则创建用户级覆盖（升级软件不会被重置）。
-- **GNOME 桌面环境兼容**：Ubuntu GNOME 下的 Chromium/Electron 会优先读 `gsettings` 而忽略 `HTTPS_PROXY`，桌面包装器会在检测到可用代理时自动附加 `--proxy-server` 与 `--proxy-bypass-list`。
+- **绝不覆盖官方 `~/.local/bin/agy`**：官方 `install.sh` 会把真正的 CLI 安装到 `~/.local/bin/agy`。本工具将代理 shim 安装到独立目录 `~/.local/share/agy-proxy/bin/agy`，只需在 `PATH` 中排在 `~/.local/bin` 前面即可。
+- **自动适配 `Antigravity.tar.gz` 与 `.desktop`**：无论解压在 `~/Downloads/Antigravity`、`~/Antigravity-x64` 还是其他目录，传 `--app-bin <解压目录或可执行文件>` 即可记录到 `~/.config/agy-proxy/app-bin.conf` 并自动生成 `~/.local/share/applications/antigravity.desktop`；若系统已有 `.desktop` 则创建用户级覆盖（升级软件不会被重置）。
+- **GNOME 桌面环境兼容**：Ubuntu GNOME 下 Chromium 会优先读取 `gsettings` 系统代理并忽略环境变量 `HTTPS_PROXY`。桌面包装器检测到可用代理时会自动附加 `--proxy-server` 与 `--proxy-bypass-list=localhost;127.0.0.1;[::1]`（如需关闭该行为，设 `ANTIGRAVITY_NO_ELECTRON_PROXY_FLAG=1`）。
+
+### 1. 安装（以 `Antigravity.tar.gz` 为例）
 
 ```bash
-# 假设已解压官方压缩包：tar -xzf Antigravity.tar.gz（例如在 ~/Downloads/Antigravity）
+# 假设已解压官方压缩包：tar -xzf Antigravity.tar.gz（例如得到 ~/Antigravity-x64）
+# 如尚未安装官方 CLI，可先执行：curl -fsSL https://antigravity.google/cli/install.sh | bash
 chmod +x linux/*.sh
 
-# 一键安装包装器并指定解压目录（也可直接传 ./Antigravity 可执行文件路径；省略时自动探测）
-# 若检测到 antigravity-pulse 会自动补齐本地调试端口参数（也可显式传 --with-debug-port）
-./linux/install-linux.sh --proxy http://127.0.0.1:7897 --app-bin ~/Downloads/Antigravity
-
-# 确保 shim 目录排在 ~/.local/bin 之前（写入 ~/.bashrc 或 ~/.zshrc）
-export PATH="$HOME/.local/share/agy-proxy/bin:$HOME/.local/bin:$PATH"
-
-# 也可直接在解压目录内运行桌面包装器（无配置时会自动探测当前目录的 ./Antigravity）
-antigravity-proxy
-
-# 状态检查 / 跨平台诊断 / 卸载（默认保留 proxy.conf，绝不删除官方 ~/.local/bin/agy）
-./linux/install-linux.sh --status
-python3 scripts/diagnose-mode.py
-./linux/install-linux.sh --uninstall
+# 一键安装包装器并写入你的代理地址 + 解压目录（目录名 Antigravity / Antigravity-x64 等均可）
+# --with-debug-port 会为 .desktop 补齐 Antigrative Dashboard / antigravity-pulse 调试端口（已安装该插件时可自动识别）
+./linux/install-linux.sh --proxy http://127.0.0.1:<你的代理端口> --app-bin ~/Antigravity-x64 --with-debug-port
 ```
+
+### 2. 持久化 `PATH`（让终端 `agy` 走代理 shim）
+
+将独立 shim 目录写入 shell 启动文件末尾，确保排在 `~/.local/bin` 之前：
+
+```bash
+# Bash（Ubuntu 默认）
+echo 'export PATH="$HOME/.local/share/agy-proxy/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+
+# 如果你使用 Zsh，请改为：
+# echo 'export PATH="$HOME/.local/share/agy-proxy/bin:$PATH"' >> ~/.zshrc
+# source ~/.zshrc
+```
+
+> 若终端提示 `antigravity-proxy: command not found`，再确保 `~/.local/bin` 也在 `PATH` 中（桌面应用图标不依赖终端 `PATH`，安装完即可直接点击）：
+> `export PATH="$HOME/.local/share/agy-proxy/bin:$HOME/.local/bin:$PATH"`
+
+### 3. 验证与启动
+
+```bash
+which agy                               # 应输出 ~/.local/share/agy-proxy/bin/agy
+agy --shim-version                      # 应输出 agy-shim-linux 2.2.0
+./linux/install-linux.sh --status       # 确认配置、.desktop 与代理端口探活状态（自定义端口会显示 [from proxy.conf]）
+agy -p "reply OK"                       # 验证 CLI 走代理连通
+antigravity-proxy                       # 或从桌面应用菜单启动 Antigravity GUI（无配置时也会兜底探测当前目录 ./Antigravity）
+```
+
+### 4. 改端口、换目录、沙箱排障与卸载
+
+- **更改代理端口**：重跑 `./linux/install-linux.sh --proxy <新端口或URL>`，或直接编辑 `~/.config/agy-proxy/proxy.conf` 立即生效。
+- **更换解压目录**：重跑 `./linux/install-linux.sh --app-bin <新目录或可执行文件>`（或编辑 `~/.config/agy-proxy/app-bin.conf`）。
+- **Ubuntu 24.04+ `chrome-sandbox` 报错**（部分内核限制非特权用户命名空间）：可在首次验证时运行 `antigravity-proxy --no-sandbox`，或为解压目录内的 `chrome-sandbox` 授权：
+  ```bash
+  sudo chown root:root ~/Antigravity-x64/chrome-sandbox
+  sudo chmod 4755 ~/Antigravity-x64/chrome-sandbox
+  ```
+- **跨平台诊断与一键卸载**（保留 `proxy.conf`，绝不删除官方 `~/.local/bin/agy`）：
+  ```bash
+  python3 scripts/diagnose-mode.py
+  ./linux/install-linux.sh --uninstall
+  ```
+
+---
+
+## 常见问题排查（FAQ）
+
+| 现象 | 常见原因 | 处理方式 |
+|---|---|---|
+| `--status` 显示我的端口是 `open`，下面还有 `7890` `closed` | `7897 / 7890 / 10809` 仅作为**回退兜底**列出 | 只要看到 `<你的端口> open [from proxy.conf]` 即已生效，实际启动只使用你的配置端口 |
+| Windows `agy` 仍报 `oauth2.googleapis.com` 超时 | 当前终端是在安装 shim 之前打开的，或被其他 `agy.exe` 抢先匹配 | 重开终端运行 `(Get-Command agy).Source` 与 `agy --version`，确认指向 `shim\agy.exe` |
+| Ubuntu 运行 `agy` 未走代理 | `~/.local/share/agy-proxy/bin` 没排在 `~/.local/bin` 前 | 按上文加入 `~/.bashrc`/`~/.zshrc` 并 `source`，确认 `which agy` 指向 `.local/share/agy-proxy/bin/agy` |
+| 代理明明开着，依然连接超时（或规则模式行/全局不行） | 节点本身不通 `cloudcode-pa`（半死节点）或全局模式选了 `DIRECT`/失效节点 | 运行 `scripts/diagnose-mode.ps1`（Windows）或 `python3 scripts/diagnose-mode.py`（全平台）逐域名排查并切换节点 |
+| Dashboard 内嵌栏不见了 / 开始菜单被还原 | Electron Toast 通知或客户端更新重置了快捷方式 | 重跑 `repoint-shortcut.ps1 -AddDebugPort -ProtectStartMenu`；并部署开机自愈 VBS |
+| 想换代理软件/换端口 | — | 修改 `proxy.conf` 第一行或重跑安装/编译脚本带新端口即可，无需改代码 |
+| 想完全还原系统默认状态 | — | Windows 跑 `scripts\uninstall-windows.ps1`（加 `-Purge` 清配置）；Linux 跑 `./linux/install-linux.sh --uninstall` |
 
 ---
 

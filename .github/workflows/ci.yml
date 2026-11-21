@@ -157,7 +157,9 @@ jobs:
           assert "--no-proxy-server" in data["argv"], data
           PY
 
-          PATH="$HOME/.local/share/agy-proxy/bin:$HOME/.local/bin:$PATH" bash linux/install-linux.sh --status
+          STATUS_OUT="$(PATH="$HOME/.local/share/agy-proxy/bin:$HOME/.local/bin:$PATH" bash linux/install-linux.sh --status)"
+          echo "$STATUS_OUT"
+          grep -Eq "127\.0\.0\.1:${PORT}[[:space:]]+open[[:space:]]+\[from proxy\.conf\]" <<<"$STATUS_OUT"
           bash linux/install-linux.sh --uninstall
           test -f "$HOME/.local/bin/agy"
           test "$(sha256sum "$HOME/.local/bin/agy" | awk '{print $1}')" = "$ORIG_AGY_SHA"

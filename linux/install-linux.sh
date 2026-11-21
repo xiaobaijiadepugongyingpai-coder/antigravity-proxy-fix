@@ -297,6 +297,92 @@ detect_desktop_binary() {
     return 1
 }
 
+normalize_proxy() {
+    local raw="${1:-}"
+    raw="${raw#"${raw%%[![:space:]]*}"}"
+    raw="${raw%"${raw##*[![:space:]]}"}"
+    raw="${raw#\"}"
+    raw="${raw%\"}"
+    raw="${raw#\'}"
+    raw="${raw%\'}"
+    [ -z "$raw" ] && return 1
+
+    if [[ "$raw" =~ ^[0-9]+$ ]] && [ "$raw" -ge 1 ] && [ "$raw" -le 65535 ]; then
+        printf 'http://127.0.0.1:%s\n' "$raw"
+        return 0
+    fi
+
+    if [[ "$raw" != *"://"* ]]; then
+        raw="http://$raw"
+    fi
+
+    printf '%s\n' "$raw"
+}
+
+read_proxy_conf() {
+    [ -f "$CONF_FILE" ] || return 1
+    local line key val
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [ -z "$line" ] && continue
+        case "$line" in
+            \#*|\;*) continue ;;
+        esac
+        if [[ "$line" == *=* ]]; then
+            key="${line%%=*}"
+            val="${line#*=}"
+            key="${key#"${key%%[![:space:]]*}"}"
+            key="${key%"${key##*[![:space:]]}"}"
+            case "${key^^}" in
+                AGY_PROXY|ANTIGRAVITY_PROXY|HTTPS_PROXY|HTTP_PROXY|PROXY)
+                    line="$val"
+                    ;;
+            esac
+        fi
+        normalize_proxy "$line" && return 0
+    done < "$CONF_FILE"
+    return 1
+}
+
+parse_proxy_host_port() {
+    local url="$1"
+    local no_scheme="${url#*://}"
+    local authority="${no_scheme%%/*}"
+    authority="${authority##*@}"
+    local host port
+    if [[ "$authority" == \[*\]* ]]; then
+        host="${authority#\[}"
+        host="${host%%\]*}"
+        port="${authority##*\]:}"
+    else
+        host="${authority%:*}"
+        port="${authority##*:}"
+    fi
+
+    if [ -z "$host" ] || ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+        return 1
+    fi
+
+    printf '%s\t%s\n' "$host" "$port"
+}
+
+probe_host_port() {
+    local host="$1"
+    local port="$2"
+    if command -v timeout >/dev/null 2>&1; then
+        if timeout 0.4 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$port" 2>/dev/null; then
+            return 0
+        fi
+    elif command -v python3 >/dev/null 2>&1; then
+        if python3 -c 'import socket,sys; s=socket.create_connection((sys.argv[1],int(sys.argv[2])),0.4); s.close()' "$host" "$port" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
 show_status() {
     local detected_app=""
     detected_app="$(detect_desktop_binary || true)"
@@ -358,15 +444,55 @@ show_status() {
         printf '  %-14s = %s\n' "$v" "${val:-<unset>}"
     done
 
-    printf '\n=== Local proxy port probe ===\n'
-    local p
-    for p in 7897 7890 10809; do
-        if timeout 0.4 bash -c 'exec 3<>"/dev/tcp/127.0.0.1/$1"' _ "$p" 2>/dev/null; then
-            printf '  127.0.0.1:%-5s open\n' "$p"
-        else
-            printf '  127.0.0.1:%-5s closed\n' "$p"
+    printf '\n=== Proxy endpoint probe ===\n'
+    local -a probe_urls=()
+    local -a probe_tags=()
+    local norm_url=""
+
+    if [ -n "${AGY_PROXY:-}" ]; then
+        norm_url="$(normalize_proxy "${AGY_PROXY}" || true)"
+        if [ -n "$norm_url" ]; then
+            probe_urls+=("$norm_url")
+            probe_tags+=("[from AGY_PROXY]")
         fi
+    fi
+    if [ -n "${ANTIGRAVITY_PROXY:-}" ]; then
+        norm_url="$(normalize_proxy "${ANTIGRAVITY_PROXY}" || true)"
+        if [ -n "$norm_url" ]; then
+            probe_urls+=("$norm_url")
+            probe_tags+=("[from ANTIGRAVITY_PROXY]")
+        fi
+    fi
+    norm_url="$(read_proxy_conf || true)"
+    if [ -n "$norm_url" ]; then
+        probe_urls+=("$norm_url")
+        probe_tags+=("[from proxy.conf]")
+    fi
+    for norm_url in "http://127.0.0.1:7897" "http://127.0.0.1:7890" "http://127.0.0.1:10809"; do
+        probe_urls+=("$norm_url")
+        probe_tags+=("[fallback]")
     done
+
+    local seen_hp="|"
+    local idx hp host port endpoint state
+    for idx in "${!probe_urls[@]}"; do
+        hp="$(parse_proxy_host_port "${probe_urls[$idx]}" || true)"
+        [ -n "$hp" ] || continue
+        host="${hp%%$'\t'*}"
+        port="${hp#*$'\t'}"
+        endpoint="${host}:${port}"
+        case "$seen_hp" in
+            *"|${endpoint}|"*) continue ;;
+        esac
+        seen_hp="${seen_hp}${endpoint}|"
+        if probe_host_port "$host" "$port"; then
+            state="open"
+        else
+            state="closed"
+        fi
+        printf '  %-22s %-7s %s\n' "$endpoint" "$state" "${probe_tags[$idx]}"
+    done
+    printf '  (fallback ports are only used when proxy.conf is unset or unreachable)\n'
 }
 
 do_uninstall() {
