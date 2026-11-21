@@ -184,21 +184,31 @@ foreach ($d in $domains) {
 
 Write-Host ''
 Write-Host '=== 4. Verdict ===' -ForegroundColor Cyan
-$allFailed = @($results | Where-Object { $_.Code -ne '000' }).Count -eq 0
-$aiFailed  = @($results | Where-Object { $_.Domain -like '*cloudcode-pa*' -and $_.Code -eq '000' }).Count
-$coreOk    = @($results | Where-Object { $_.Domain -notlike '*cloudcode-pa*' -and $_.Code -ne '000' }).Count
-$slowAi    = @($results | Where-Object { $_.Domain -eq 'cloudcode-pa.googleapis.com' -and $_.Code -ne '000' -and $_.Tls -gt 1.0 }).Count
+$failedDomains = @($results | Where-Object { $_.Code -eq '000' } | ForEach-Object { $_.Domain })
+$allFailed     = ($failedDomains.Count -eq $results.Count)
+$aiFailed      = @($results | Where-Object { $_.Domain -like '*cloudcode-pa*' -and $_.Code -eq '000' }).Count -gt 0
+$coreOk        = @($results | Where-Object { $_.Domain -notlike '*cloudcode-pa*' -and $_.Code -ne '000' }).Count -gt 0
+$slowAi        = @($results | Where-Object { $_.Domain -like '*cloudcode-pa*' -and $_.Code -ne '000' -and $_.Tls -gt 1.0 })
 
 if ($allFailed) {
     Write-Host '[FAIL] All Google domains returned 000 via proxy.' -ForegroundColor Red
     Write-Host '       Likely cause: active Clash node is down, GLOBAL is on DIRECT/REJECT or a fake info node, or wrong proxy port.'
     exit 2
-} elseif ($aiFailed -gt 0 -and $coreOk -gt 0) {
+} elseif ($aiFailed -and $coreOk) {
     Write-Host '[NODE ISSUE] General Google works, but cloudcode-pa failed (000).' -ForegroundColor Yellow
     Write-Host '             Your proxy injection works; the selected node has trouble reaching Google AI upstream. Switch node.'
     exit 3
-} elseif ($slowAi -gt 0) {
-    Write-Host '[SLOW] All domains reachable, but cloudcode-pa TLS handshake > 1.0s.' -ForegroundColor Yellow
+} elseif ($failedDomains.Count -gt 0) {
+    Write-Host ('[PARTIAL] Some domains failed/timed out (000): ' + ($failedDomains -join ', ') + '.') -ForegroundColor Yellow
+    if ($slowAi.Count -gt 0) {
+        $maxTls = ($slowAi | Measure-Object -Property Tls -Maximum).Maximum
+        Write-Host ('[SLOW] Slow cloudcode-pa TLS handshake detected (max {0:F2}s; Go default TLS timeout is 10s).' -f $maxTls) -ForegroundColor Yellow
+        Write-Host '       Consider switching to a faster, more stable node.'
+    }
+    exit 1
+} elseif ($slowAi.Count -gt 0) {
+    $maxTls = ($slowAi | Measure-Object -Property Tls -Maximum).Maximum
+    Write-Host ('[SLOW] All domains reachable, but cloudcode-pa TLS handshake > 1.0s (max {0:F2}s; Go default TLS timeout is 10s).' -f $maxTls) -ForegroundColor Yellow
     Write-Host '       Consider switching GLOBAL / proxy-group to a lower-latency node for Google AI.'
     exit 0
 } else {

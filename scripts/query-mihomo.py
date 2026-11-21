@@ -112,6 +112,7 @@ def find_controller_urls():
 
 
 SECRET = find_secret()
+LAST_ENDPOINT = None
 
 
 # ---------------------------------------------------------------
@@ -332,20 +333,26 @@ def _request_http_controller(path):
 
 def request(path):
     """自动选择本机可用的 mihomo 控制通道并发送 GET 请求。"""
+    global LAST_ENDPOINT
+    LAST_ENDPOINT = None
     if sys.platform == "win32":
         pipe = find_pipe()
         if pipe:
             data = _request_windows_pipe(pipe, path)
             if data is not None:
+                LAST_ENDPOINT = pipe
                 return data
     else:
         sock_path = find_unix_socket()
         if sock_path:
             data = _request_unix_socket(sock_path, path)
             if data is not None:
+                LAST_ENDPOINT = sock_path
                 return data
 
-    data, _ = _request_http_controller(path)
+    data, base = _request_http_controller(path)
+    if data is not None:
+        LAST_ENDPOINT = base
     return data
 
 
@@ -373,7 +380,10 @@ def main():
         return
 
     if which.startswith("/configs"):
+        if LAST_ENDPOINT:
+            print(f"{'controller':12} = {LAST_ENDPOINT}")
         print(f"{'mode':12} = {data.get('mode')}")
+        print(f"{'port':12} = {data.get('port')}")
         print(f"{'mixed-port':12} = {data.get('mixed-port')}")
         print(f"{'socks-port':12} = {data.get('socks-port')}")
         tun = data.get("tun") or {}

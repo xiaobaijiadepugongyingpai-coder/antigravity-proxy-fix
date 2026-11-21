@@ -164,12 +164,30 @@ def main():
     qm = load_query_mihomo()
     if qm is not None:
         cfg = qm.request("/configs")
+        ctrl = getattr(qm, "LAST_ENDPOINT", None)
         if cfg:
             tun = cfg.get("tun") or {}
+            if ctrl:
+                print(f"  controller = {ctrl}")
             print(f"  mode       = {cfg.get('mode')}")
+            print(f"  port       = {cfg.get('port')}")
             print(f"  mixed-port = {cfg.get('mixed-port')}")
             print(f"  socks-port = {cfg.get('socks-port')}")
             print(f"  tun.enable = {tun.get('enable')}")
+            chosen_port = urllib.parse.urlparse(chosen).port
+            clash_ports = {
+                p for p in (cfg.get("port"), cfg.get("mixed-port"), cfg.get("socks-port"))
+                if isinstance(p, int) and p > 0
+            }
+            if chosen_port and clash_ports and chosen_port not in clash_ports:
+                print(
+                    f"\n  [NOTE] Active proxy port {chosen_port} does not match this mihomo controller's ports "
+                    f"(port={cfg.get('port')}, mixed-port={cfg.get('mixed-port')}, socks-port={cfg.get('socks-port')})."
+                )
+                print(
+                    f"         You are likely using a different proxy client/instance on {chosen_port}; "
+                    f"the Clash info above is from {ctrl}."
+                )
         else:
             print("  (could not query /configs from mihomo)")
 
@@ -207,10 +225,15 @@ def main():
         results.append((d, code, tls, total))
 
     print("\n=== 4. Verdict ===")
-    all_failed = all(c == "000" for _, c, _, _ in results)
+    return evaluate_verdict(results)
+
+
+def evaluate_verdict(results):
+    failed_domains = [d for d, c, _, _ in results if c == "000"]
+    all_failed = len(failed_domains) == len(results)
     ai_failed = any("cloudcode-pa" in d and c == "000" for d, c, _, _ in results)
     core_ok = any("cloudcode-pa" not in d and c != "000" for d, c, _, _ in results)
-    slow_ai = any(d == "cloudcode-pa.googleapis.com" and c != "000" and tls > 1.0 for d, c, tls, _ in results)
+    slow_ai = [(d, tls) for d, c, tls, _ in results if "cloudcode-pa" in d and c != "000" and tls > 1.0]
 
     if all_failed:
         print("[FAIL] All Google domains returned 000 via proxy.")
@@ -220,8 +243,16 @@ def main():
         print("[NODE ISSUE] General Google works, but cloudcode-pa failed (000).")
         print("             Proxy injection is fine; switch to another node for Google AI upstream.")
         return 3
+    if failed_domains:
+        print(f"[PARTIAL] Some domains failed/timed out (000): {', '.join(failed_domains)}.")
+        if slow_ai:
+            max_tls = max(tls for _, tls in slow_ai)
+            print(f"[SLOW] Slow cloudcode-pa TLS handshake detected (max {max_tls:.2f}s; Go default TLS timeout is 10s).")
+            print("       Consider switching to a faster, more stable node.")
+        return 1
     if slow_ai:
-        print("[SLOW] All domains reachable, but cloudcode-pa TLS handshake > 1.0s.")
+        max_tls = max(tls for _, tls in slow_ai)
+        print(f"[SLOW] All domains reachable, but cloudcode-pa TLS handshake > 1.0s (max {max_tls:.2f}s; Go default TLS timeout is 10s).")
         print("       Consider switching GLOBAL / proxy group to a lower-latency node.")
         return 0
     print("[OK] Proxy port, active node, and all Antigravity/Google endpoints look healthy.")
