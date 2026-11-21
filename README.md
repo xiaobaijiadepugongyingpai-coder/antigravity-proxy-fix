@@ -3,8 +3,11 @@
 > 让 Google Antigravity 桌面版和 Antigravity CLI (`agy`) 在中国大陆网络环境下正常工作
 
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)]()
-[![Tested](https://img.shields.io/badge/tested-Antigravity%202.29.1%20%7C%20agy%201.5.3-green)]()
+[![Tested](https://img.shields.io/badge/tested-Antigravity%202.29.1%20%7C%202.32.2%20%7C%20agy%201.5.3%20%7C%201.5.9-green)]()
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)]()
+
+> ⚠️ **Antigravity 2.32.x 起新增 WSL 运行模式。** 若本方案配置看起来都对、却仍然超时，请先读
+> **[04 · WSL 模式下的代理](docs/04-wsl-mode.md)** —— 那种情况下 Go 内核跑在 WSL2 里，Windows 的环境变量跨不过去。
 
 ---
 
@@ -37,6 +40,30 @@ Antigravity.exe          ← Electron 外壳（认 Windows 系统代理）
 Go 的 `net/http` 通过 `http.ProxyFromEnvironment` 获取代理配置，**唯一来源是环境变量**。它不读注册表、不读 WinHTTP、不读 PAC。
 
 所以：**浏览器能上 Google，但这两个程序在直连 → 超时 → 卡死。**
+
+### ⚠️ 2.32.x 起多了一种情况：Go 内核可能在 WSL 里
+
+从 **Antigravity 2.32.x** 开始，部分安装会把 Go 内核放进 **WSL2 的 Linux 环境**运行：
+
+```
+Antigravity.exe                       ← Electron（Windows）
+    └─ WSL2 Ubuntu: language_server   ← Go 内核（Linux 进程！）
+            ↑
+            Windows 的 HTTP_PROXY 无法穿越 WSL 边界
+```
+
+**这时本仓库的注入仍然成功，但完全不起作用** —— 环境变量到不了 WSL 内部。
+
+**一行自查：**
+
+```powershell
+Get-Content "$env:APPDATA\Antigravity\wsl_state.json"
+# {"distro":"Ubuntu"}  → WSL 模式，请读 docs/04-wsl-mode.md
+# 文件不存在            → Windows 原生模式，用下面的主线方案
+```
+
+WSL 模式的修复方式（`.wslconfig` 开镜像网络）见
+**[04 · WSL 模式下的代理](docs/04-wsl-mode.md)**。两者是**叠加**关系：原有部署不要拆。
 
 ---
 
@@ -113,6 +140,7 @@ agy -p "reply OK"               # 应返回 OK
 | [01 · 技术原理](docs/01-technical-go-proxy.md) | 为什么 Go 程序读不到系统代理；如何从日志定位 | 遇到同类问题的开发者 |
 | [02 · 实践方案](docs/02-practice-per-app-proxy.md) | 三种方案对比、完整实现、代理模式选择 | 想自己配置的人 |
 | [03 · 使用指南](docs/03-usage-guide.md) | 从安装到排查的完整手册（含 CLI 命令详解） | Antigravity 用户 |
+| [04 · WSL 模式](docs/04-wsl-mode.md) | **Antigravity 2.32.x 起 Go 内核可能跑在 WSL2 里；配置对却不生效时看这篇** | 遇到"配置全对但仍超时"的人 |
 | [AI 协作记录](docs/ai-collaboration/) | 自评 → 同行复核 → 修复的完整闭环 | 研究 AI 工作流的人 |
 | [交接报告](docs/HANDOVER.md) | 架构、决策理由、故障树、遗留问题 | **接手维护的人 / AI** |
 
@@ -128,6 +156,7 @@ agy -p "reply OK"               # 应返回 OK
 │   ├── 01-technical-go-proxy.md       # 技术原理与排查方法
 │   ├── 02-practice-per-app-proxy.md   # 方案对比与完整实现
 │   ├── 03-usage-guide.md              # 国内使用完全指南
+│   ├── 04-wsl-mode.md                 # WSL 模式（2.32.x+）专用说明
 │   └── ai-collaboration/
 │       ├── 01-self-assessment.md      # AI 自评报告（主动列 4 项弱点）
 │       ├── 02-peer-review.md          # 第一轮独立复核（发现 2 项未披露问题）
@@ -215,6 +244,35 @@ $raw = $key.GetValue('Path','',[Microsoft.Win32.RegistryValueOptions]::DoNotExpa
 
 - `netstat -ano` 单次耗时 46–53ms，400ms 轮询会漏掉短连接
 - `Get-NetTCPConnection` 会返回 `Bound`/`Listen` 状态，不过滤会误判为"直连外网"
+
+### `ELECTRON_RUN_AS_NODE=1` 会让程序"双击没反应"
+
+如果你从**另一个 Electron 应用的子进程环境**里启动 Antigravity，会继承这个变量。
+
+后果：`Antigravity.exe` 不启动 GUI，**以纯 Node 模式运行 250ms 后正常退出**（exit code 0，不写任何日志）。看起来完全像"安装坏了"或"被修坏了"。
+
+```powershell
+Antigravity.exe --version
+# 2.32.2   → 正常
+# v24.22.0 → 被 ELECTRON_RUN_AS_NODE 控制（打印的是 Node 版本）
+```
+
+这个坑很危险：它和代理问题叠加时，会让人误以为是自己的修复把程序弄坏了。
+
+### 判断 HTTP 代理是否连通，别看裸 TCP
+
+```
+# ❌ 假阴性：mihomo 的 HTTP 代理端口不响应裸 TCP 连接
+cat < /dev/tcp/127.0.0.1/7897   →  UNREACHABLE（其实代理是好的）
+
+# ✅ 用真正的 HTTP 请求
+curl --proxy http://127.0.0.1:7897 https://oauth2.googleapis.com/token
+# 404 说明通了（该端点不接受空 POST），超时才是真不通
+```
+
+### 强杀 Electron 进程后，"启动即退出"要先排除环境变量
+
+`Stop-Process -Force` 之后如果程序启动即退，**先查 `ELECTRON_RUN_AS_NODE`**（见上一条），再怀疑残留锁。顺序弄反会浪费大量时间。
 
 ---
 
